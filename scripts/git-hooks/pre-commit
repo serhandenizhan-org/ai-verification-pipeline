@@ -13,6 +13,11 @@
 
 set -euo pipefail
 
+# Git hook'lar login shell olmadığı için Homebrew'in shellenv'i (örn.
+# ~/.zprofile) burada okunmamış olabilir — /opt/homebrew/bin'i PATH'e
+# elle ekliyoruz ki gitleaks orada kurulu olsa bile bulunabilsin.
+export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
+
 if ! command -v gitleaks &> /dev/null; then
   echo "UYARI: gitleaks kurulu değil, secret taraması ATLANIYOR." >&2
   echo "Kurulum için: https://github.com/gitleaks/gitleaks#installing" >&2
