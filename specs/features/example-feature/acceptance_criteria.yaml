@@ -1,0 +1,29 @@
+# ŞABLON — gerçek bir feature eklerken bu klasörü kopyalayıp
+# "example-feature" adını gerçek feature adıyla değiştirin.
+#
+# Bu dosya, Orchestrator tarafından Şef ile yapılan mimari konuşmanın
+# sonunda taslak olarak üretilir. Şef onayından sonra
+# scripts/lock_ac.sh ile KİLİTLENİR — kilit sonrası Builder bu dosyayı
+# değiştiremez. Codex bu dosyadaki eksikleri işaret edebilir (AC-Gap,
+# ADVISORY) ama dosyayı kendisi değiştiremez.
+
+feature: "example-feature"
+status: "draft"  # draft -> locked -> implemented
+locked_hash: null  # lock_ac.sh tarafından doldurulur
+
+criteria:
+  - id: AC-01
+    description: "Kullanıcı aktif ödeme yöntemiyle abone olabilir"
+  - id: AC-02
+    description: "Aynı kullanıcı ikinci kez abone olamaz (duplicate engellenir)"
+  - id: AC-03
+    description: "Ödeme başarısız olursa abonelik aktifleşmez"
+  - id: AC-04
+    description: "Webhook iki kez gelirse abonelik durumu bozulmaz (idempotent)"
+  - id: AC-05
+    description: "Abonesi olmayan kullanıcı premium endpoint'e erişemez"
+  - id: AC-06
+    description: "Abonelik süresi dolunca erişim otomatik kesilir"
+
+# Not: Bu örnek subscription feature'ından alınmıştır. Gerçek feature'ınız
+# için AC'leri Şef ile birlikte yeniden yazın — kopyalamayın.

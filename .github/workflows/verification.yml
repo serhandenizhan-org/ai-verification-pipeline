@@ -1,0 +1,100 @@
+# VERIFICATION — Fast CI PASS olduktan SONRA çalışır.
+# Risk seviyesini hesaplar, seviyeye göre Reviewer Codex'i tetikler,
+# sonuçları Verification Ledger'a yazar ve gerekirse Şef'e bildirim gönderir.
+#
+# NOT: Codex entegrasyonu (aşağıdaki "codex-review" job'ı) burada bir
+# YER TUTUCUDUR. Kullanacağınız Codex erişim yöntemine göre (resmi GitHub
+# App, CLI, veya API) bu adımı gerçek komutla değiştirmeniz gerekir.
+# Şu an için: PR'a "needs-codex-review" etiketi eklenir ve bir yorum
+# bırakılır — Codex GitHub App'i kurulduğunda bu tetikleyiciyi
+# kullanacak şekilde ayarlanabilir.
+
+name: Verification
+
+on:
+  workflow_run:
+    workflows: ["Fast CI"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  risk-routing:
+    name: Risk Routing
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      risk_level: ${{ steps.risk.outputs.risk_level }}
+      required_checks: ${{ steps.risk.outputs.required_checks }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_branch }}
+
+      - name: Python kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Risk seviyesini hesapla
+        id: risk
+        working-directory: orchestrator
+        run: |
+          python3 router.py --base origin/main --head HEAD
+
+      - name: Ledger'a risk kaydını yaz
+        working-directory: orchestrator
+        env:
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+        run: |
+          python3 verifier.py compute-risk \
+            --pr "$PR_NUMBER" \
+            --base origin/main \
+            --head HEAD
+
+  codex-review:
+    name: Reviewer Codex (deep review)
+    needs: risk-routing
+    if: needs.risk-routing.outputs.risk_level != 'LOW'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Codex review tetikle (YER TUTUCU — gerçek entegrasyonla değiştirin)
+        env:
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Risk seviyesi LOW değil, Codex review gerekiyor."
+          gh pr comment "$PR_NUMBER" --body "@codex review — bu PR risk seviyesi nedeniyle deep review gerektiriyor."
+          gh pr edit "$PR_NUMBER" --add-label "needs-codex-review"
+
+      # Codex sonucu geldiğinde (Codex'in kendi entegrasyonuna göre —
+      # webhook, ayrı bir workflow, ya da manuel Şef girişi) aşağıdaki
+      # komutla ledger'a yazılmalıdır:
+      #
+      #   python3 orchestrator/verifier.py record-codex \
+      #     --pr "$PR_NUMBER" \
+      #     --status PASS|FAIL \
+      #     --findings-json '{"blocking": 0, "advisory": 2}' \
+      #     --report-url "<codex-raporu-linki>" \
+      #     --pr-url "<pr-linki>"
+
+  low-risk-fast-path:
+    name: Low Risk — Doğrudan Şef Onayına Geç
+    needs: risk-routing
+    if: needs.risk-routing.outputs.risk_level == 'LOW'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: PR'ı Şef onayı için işaretle
+        env:
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr edit "$PR_NUMBER" --add-label "ready-for-human-approval"
+          gh pr comment "$PR_NUMBER" --body "Risk seviyesi LOW — Codex review atlandı, doğrudan Şef onayı bekleniyor."

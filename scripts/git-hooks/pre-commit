@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#
+# pre-commit — gitleaks ile staged değişiklikleri commit'ten ÖNCE tarar.
+#
+# Kurulum (repo kök dizininden):
+#   cp scripts/git-hooks/pre-commit .git/hooks/pre-commit
+#   chmod +x .git/hooks/pre-commit
+#
+# gitleaks kurulu değilse:
+#   macOS:   brew install gitleaks
+#   Linux:   bkz. https://github.com/gitleaks/gitleaks#installing
+#   Docker:  gerekmez, bu script binary bekliyor.
+
+set -euo pipefail
+
+if ! command -v gitleaks &> /dev/null; then
+  echo "UYARI: gitleaks kurulu değil, secret taraması ATLANIYOR." >&2
+  echo "Kurulum için: https://github.com/gitleaks/gitleaks#installing" >&2
+  exit 0
+fi
+
+echo "gitleaks: staged değişiklikler taranıyor..."
+
+if ! gitleaks protect --staged --redact --verbose; then
+  echo "" >&2
+  echo "!!! COMMIT ENGELLENDİ !!!" >&2
+  echo "gitleaks staged değişikliklerde olası bir secret buldu." >&2
+  echo "Gerçek bir secret ise: commit'i iptal edin, secret'ı .env'e taşıyın." >&2
+  echo "Yanlış pozitifse: .gitleaks.toml içine bir allowlist kuralı ekleyin." >&2
+  exit 1
+fi
+
+echo "gitleaks: temiz, commit devam ediyor."

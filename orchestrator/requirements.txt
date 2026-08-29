@@ -1,0 +1,3 @@
+# orchestrator/ script'leri için minimum bağımlılıklar.
+# Kasıtlı olarak sade tutuldu — yalnızca standart kütüphane kullanılıyor,
+# harici bağımlılık yok. Bu dosya gelecekte eklenebilecekler için hazır.
