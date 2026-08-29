@@ -24,20 +24,19 @@ if [[ ! -f "$AC_FILE" ]]; then
   exit 1
 fi
 
-# locked_hash satırını hesaba katmadan hash almak için geçici olarak
-# o satırı çıkarıp hash alıyoruz — böylece hash, kilitten SONRAKİ
-# değişiklikleri (dosyanın geri kalanı) doğru şekilde yakalar.
+# Önce status'u "locked" yap, SONRA hash'i bu nihai içerik üzerinden hesapla
+# (locked_hash satırı hariç) — verify_ac_lock.sh de aynı nihai içeriği
+# hashleyeceği için ikisi birbirini tutmalı.
+sed -i.bak -e "s/^status: .*/status: \"locked\"/" "$AC_FILE"
+rm -f "${AC_FILE}.bak"
+
 TMP_FILE=$(mktemp)
 grep -v '^locked_hash:' "$AC_FILE" > "$TMP_FILE"
 
 HASH=$(sha256sum "$TMP_FILE" | awk '{print $1}')
 rm -f "$TMP_FILE"
 
-# status ve locked_hash alanlarını güncelle
-sed -i.bak \
-  -e "s/^status: .*/status: \"locked\"/" \
-  -e "s/^locked_hash: .*/locked_hash: \"${HASH}\"/" \
-  "$AC_FILE"
+sed -i.bak -e "s/^locked_hash: .*/locked_hash: \"${HASH}\"/" "$AC_FILE"
 rm -f "${AC_FILE}.bak"
 
 echo "Kilitlendi: $AC_FILE"
