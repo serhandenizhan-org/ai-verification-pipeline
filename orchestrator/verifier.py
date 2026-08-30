@@ -47,6 +47,7 @@ import ledger
 import notifier
 import router
 import alert_and_rotate
+import finding_triage
 
 
 def cmd_compute_risk(args: argparse.Namespace) -> int:
@@ -118,6 +119,13 @@ def cmd_record_codex(args: argparse.Namespace) -> int:
         except (OSError, json.JSONDecodeError):
             pass
 
+    # Codex'in önerdiği özellik: bulgulara kalıcı kimlik (fingerprint) ve
+    # triage geçmişi — aynı bulgu tekrar tekrar "yeni" gibi görünmesin,
+    # Şef'in kabul ettiği (accepted) istisnalar takip edilebilsin.
+    parsed_findings = finding_triage.parse_findings(report_text)
+    finding_status = finding_triage.record_findings(args.repo, parsed_findings) if parsed_findings else {}
+    unaccepted_blocking = finding_triage.unaccepted_blocking_count(args.repo, parsed_findings)
+
     ledger.append_entry(ledger.LedgerEntry(
         repo=args.repo,
         pr=args.pr,
@@ -127,6 +135,8 @@ def cmd_record_codex(args: argparse.Namespace) -> int:
             "findings": findings,
             "report_text": report_text,
             "deps_report": deps_report,
+            "finding_triage": finding_status,
+            "unaccepted_blocking": unaccepted_blocking,
         },
         head_sha=args.head_sha,
         run_id=args.run_id,
@@ -151,7 +161,9 @@ def cmd_record_codex(args: argparse.Namespace) -> int:
     # her zaman 0 dönüyordu. Artık BLOCKING varsa 1 dönüyor (defense in
     # depth) — ama asıl bağlayıcı karar `gate` komutunda, bu exit code'a
     # güvenilmiyor (tek karar mekanizması ilkesi, bkz. modül docstring'i).
-    return 1 if blocking_count > 0 else 0
+    # `unaccepted_blocking` kullanılıyor: Şef'in `finding_triage.py accept`
+    # ile onayladığı bir P1 artık bloklayıcı sayılmaz.
+    return 1 if unaccepted_blocking > 0 else 0
 
 
 def cmd_record_human_approval(args: argparse.Namespace) -> int:
@@ -248,7 +260,20 @@ def _evaluate_gate(repo: str, pr: int, head_sha: str) -> tuple[str, str, dict]:
     if blocking is None:
         return "FAIL", "Codex sonucu var ama blocking sayısı okunamadı (eksik/bozuk rapor).", summary
     if blocking > 0:
-        return "FAIL", f"{blocking} adet BLOCKING Codex bulgusu var.", summary
+        # Codex'in önerdiği özellik: kalıcı bulgu kimliği + triage.
+        # `unaccepted_blocking`, ham `blocking` sayısından, Şef'in
+        # `finding_triage.py accept` ile onayladığı P1'leri düşer. Eski
+        # ledger kayıtlarında bu alan yoksa (None) ham sayıya geri döner
+        # (fail-closed: bilinmeyen durumda daha az güvenmek, daha çok değil).
+        unaccepted = summary.get("unaccepted_blocking")
+        effective_blocking = unaccepted if unaccepted is not None else blocking
+        if effective_blocking > 0:
+            return "FAIL", (
+                f"{effective_blocking} adet kabul edilmemiş BLOCKING Codex bulgusu var "
+                f"(toplam {blocking}, {blocking - effective_blocking} tanesi Şef tarafından kabul edilmiş)."
+                if effective_blocking != blocking
+                else f"{blocking} adet BLOCKING Codex bulgusu var."
+            ), summary
 
     return "PASS", f"Risk {risk_level}, Fast CI başarılı, Codex PASS, 0 BLOCKING bulgu.", summary
 
