@@ -1,3 +1,7 @@
 # orchestrator/ script'leri için minimum bağımlılıklar.
-# Kasıtlı olarak sade tutuldu — yalnızca standart kütüphane kullanılıyor,
-# harici bağımlılık yok. Bu dosya gelecekte eklenebilecekler için hazır.
+# Kasıtlı olarak sade tutuldu — yalnızca gerçekten gerekli olan eklendi.
+
+# ledger.py — Verification Ledger artık PostgreSQL'de tutuluyor (bkz.
+# schema.sql, HANDOFF.md 3.3). psycopg[binary] ek bir C derleyicisi
+# gerektirmeden kurulabiliyor.
+psycopg[binary]>=3.1,<4

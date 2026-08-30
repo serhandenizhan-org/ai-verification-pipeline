@@ -40,6 +40,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Orchestrator bağımlılıklarını kur (psycopg — Postgres ledger için)
+        run: pip install -r orchestrator/requirements.txt
+
       - name: Risk seviyesini hesapla
         id: risk
         working-directory: orchestrator
