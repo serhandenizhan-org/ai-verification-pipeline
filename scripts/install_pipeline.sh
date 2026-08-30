@@ -15,11 +15,13 @@
 #     bulmak saatler sürmüştü, script bunu tekrar keşfetmenize gerek
 #     bırakmıyor)
 #
+# ci.yml ARTIK ELLE YAZILMIYOR: scripts/generate_ci_workflow.py, hedef
+# projenin package.json/requirements.txt/pyproject.toml'una bakarak stack'i
+# (Node/Python/monorepo) otomatik tespit eder ve ci.yml'i üretir. Kod
+# eklendikçe/değiştikçe (yeni script, yeni klasör) tekrar çalıştırabilirsiniz:
+#   python3 scripts/generate_ci_workflow.py .
+#
 # NE KOPYALANMAZ (bilinçli olarak):
-#   - .github/workflows/ci.yml — bu PROJE STACK'İNE özel olmak zorunda
-#     (Node/Python/monorepo). Bir şablon (.github/workflows/ci.yml.example)
-#     kopyalanır, elle uyarlamanız gerekir (bkz. kuyumcukent-project'teki
-#     gerçek örnek).
 #   - .env — .env.example kopyalanır, gerçek secret'ları siz doldurursunuz.
 #
 # ÖN KOŞULLAR (Mac mini'de bir kere kurulur, proje başına değil):
@@ -71,7 +73,7 @@ echo "kopyalandı: orchestrator/"
 # --- scripts/ ---
 mkdir -p "$TARGET_DIR/scripts/git-hooks"
 for f in lock_ac.sh verify_ac_lock.sh check_stripe_key_mode.sh \
-         check_new_dependencies.py pin_trusted_files.sh; do
+         check_new_dependencies.py pin_trusted_files.sh generate_ci_workflow.py; do
   cp "$SOURCE_REPO_ROOT/scripts/$f" "$TARGET_DIR/scripts/$f"
 done
 cp "$SOURCE_REPO_ROOT/scripts/git-hooks/pre-commit" "$TARGET_DIR/scripts/git-hooks/pre-commit"
@@ -116,12 +118,16 @@ echo "kopyalandı: AGENTS.md"
 mkdir -p "$TARGET_DIR/.github/workflows"
 cp "$SOURCE_REPO_ROOT/.github/workflows/verification.yml" \
    "$TARGET_DIR/.github/workflows/verification.yml"
-cp "$SOURCE_REPO_ROOT/.github/workflows/ci.yml" \
-   "$TARGET_DIR/.github/workflows/ci.yml.example"
 cp "$SOURCE_REPO_ROOT/.github/branch-protection.md" \
    "$TARGET_DIR/.github/branch-protection.md"
 echo "kopyalandı: .github/workflows/verification.yml (olduğu gibi)"
-echo "kopyalandı: .github/workflows/ci.yml.example (ELLE UYARLAYIN — proje stack'inize göre)"
+
+# ci.yml artık ELLE YAZILMIYOR — proje stack'i otomatik tespit edilip
+# üretiliyor (bkz. scripts/generate_ci_workflow.py). Node/Python/monorepo
+# fark etmeksizin package.json/requirements.txt/pyproject.toml'a bakarak
+# doğru job'ları oluşturur. Kod eklendikçe/değiştikçe tekrar çalıştırılabilir.
+echo "ci.yml otomatik üretiliyor (proje stack'i tespit ediliyor)..."
+python3 "$TARGET_DIR/scripts/generate_ci_workflow.py" "$TARGET_DIR"
 
 # --- .env.example ---
 cp "$SOURCE_REPO_ROOT/.env.example" "$TARGET_DIR/.env.example"
@@ -186,11 +192,12 @@ if [[ -n "$GITHUB_REPO" ]]; then
     gh label create "ready-for-human-approval" --repo "$GITHUB_REPO" \
       --color "0E8A16" --description "CI ve Codex geçti, Şef onayı bekleniyor" 2>&1 || true
 
-    # NOT: required_status_checks context'i burada TAHMİNİ olarak
-    # "Secret Scan (gitleaks)" veriliyor — bu ci.yml.example'daki job
-    # ismiyle eşleşiyor. ci.yml.example'ı yeniden adlandırırsanız bu context
-    # de güncellenmeli, yoksa branch protection asla "yeşil" görmez
-    # (bu repoda saatlerce süren gerçek bir hataydı, bkz. HANDOFF.md).
+    # NOT: required_status_checks context'i "Secret Scan (gitleaks)" —
+    # generate_ci_workflow.py'nin ürettiği secret-scan job'ının adıyla
+    # eşleşiyor (bu job stack tespitinden bağımsız, her zaman aynı isimle
+    # üretilir). Context adı gerçek job adıyla BİREBİR eşleşmezse branch
+    # protection asla "yeşil" görmez (bu repoda saatlerce süren gerçek bir
+    # hataydı, bkz. HANDOFF.md).
     gh api "repos/$GITHUB_REPO/branches/main/protection" --method PUT --input - <<'EOF' 2>&1 || true
 {
   "required_status_checks": {
@@ -218,8 +225,9 @@ echo ""
 echo "== Sıradaki elle yapılacaklar =="
 echo "1. cd $TARGET_DIR"
 echo "2. cp .env.example .env  ve  .env'i doldurun"
-echo "3. .github/workflows/ci.yml.example dosyasını proje stack'inize göre"
-echo "   uyarlayıp ci.yml olarak kaydedin (Node/Python/monorepo — bkz. yorum)"
+echo "3. ci.yml zaten otomatik üretildi — üretilen dosyayı bir göz gezdirin"
+echo "   (.github/workflows/ci.yml), kod eklendikçe yeniden üretmek için:"
+echo "   python3 scripts/generate_ci_workflow.py ."
 echo "4. Gerçek bir feature için specs/features/<isim>/ oluşturup"
 echo "   scripts/lock_ac.sh ile kilitleyin"
 echo "5. Runner'ın bu repoya erişimi olduğundan emin olun (org seviyesinde"
