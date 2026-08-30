@@ -38,8 +38,12 @@ script bunu ekrana yazdırır).
 Bu adım şunları yapar (otomatik):
 - `orchestrator/`, `scripts/`, `specs/`, `verification/`, `AGENTS.md`,
   `.env.example`, `.github/workflows/verification.yml` kopyalanır
-- `.github/workflows/ci.yml.example` kopyalanır (DİKKAT: `.example` uzantılı,
-  aktif değil — bkz. madde 3)
+- `.github/workflows/ci.yml` OTOMATİK ÜRETİLİR — `scripts/generate_ci_workflow.py`,
+  hedef projenin `package.json`/`requirements.txt`/`pyproject.toml`'una bakıp
+  stack'i (Node/Python/monorepo) kendisi tespit eder, `lint`/`typecheck`/`test`/
+  `build` script'lerinden GERÇEKTEN var olanları kullanır, Playwright varsa
+  E2E job'ı ekler. Elle YAML yazmana gerek yok. Kod ekledikçe/değiştikçe
+  tekrar üretmek istersen: `python3 scripts/generate_ci_workflow.py .`
 - `CLAUDE.md` (Builder rolü, `specs/builder_claude_template.md`'den) +
   `.claude/settings.json` (`{"model": "sonnet"}`) oluşturulur — bu projede
   Claude Code açtığında **otomatik Builder rolünde ve Sonnet'te** başlar,
@@ -80,23 +84,25 @@ cp .env.example .env
   işaret ediyor, değiştirmene gerek yok (tüm projeler AYNI ledger DB'sini
   paylaşıyor, `pr` alanı repo bazlı ayrım yapmıyor — bkz. "Bilinen kısıt" altı)
 
-### 3. `ci.yml.example`'ı proje stack'ine göre uyarla
+### 3. `ci.yml`'i gözden geçir (artık elle yazmıyorsun)
 
-Bu adım **tamamen elle** — script bunu otomatik yapamıyor çünkü her proje
-farklı bir stack kullanıyor (Node, Python, monorepo, vb.). Yapman gerekenler:
+Adım 1'de zaten otomatik üretildi. Yapman gereken:
 
-1. `.github/workflows/ci.yml.example` dosyasını oku
-2. Projenin gerçek build/test/lint komutlarına göre `secret-scan` job'ı
-   HARİÇ her şeyi yeniden yaz (secret-scan zaten stack-agnostic, olduğu gibi
-   bırak)
-3. `docker run` ile sandbox mantığını koru (macOS runner'da native
-   `container:` çalışmıyor — bkz. `aiverificationpipeline` HANDOFF.md)
-4. Dosyayı `ci.yml` olarak kaydet (`.example` uzantısını at)
-5. `verification.yml`'deki `required_status_checks` ile GitHub branch
+1. `.github/workflows/ci.yml`'i aç, script'in ne tespit ettiğine (hangi
+   klasör, hangi komutlar) bir göz gezdir — çıktısında zaten hangi job'ları
+   neden eklediğini yazmıştı
+2. Beklediğin bir şey (ör. bir lint komutu) eksikse, muhtemelen
+   `package.json`'daki `scripts` adı script'in aradığı isimle (lint,
+   typecheck, test, build) eşleşmiyordur — ya `package.json`'ı ya da
+   `scripts/generate_ci_workflow.py`'deki eşleşmeyi düzelt, tekrar çalıştır
+3. Projende Playwright/E2E test yoksa ve script yanlışlıkla E2E job'ı
+   eklediyse (devDependencies'te `@playwright/test` var ama gerçekte
+   kullanılmıyorsa), `ci.yml`'den o job'ı elle sil
+4. `verification.yml`'deki `required_status_checks` ile GitHub branch
    protection'daki context adının GERÇEK job adıyla eşleştiğinden emin ol
-   (bu, saatlerce debug edilen bir hataydı — job'un GitHub Actions'ta
-   göründüğü isim neyse `contexts` listesinde TAM O İSİM olmalı, workflow
-   adı + job id kombinasyonu DEĞİL)
+   (`install_pipeline.sh` bunu `"Secret Scan (gitleaks)"` olarak zaten doğru
+   kuruyor — bu, saatlerce debug edilen bir hataydı, job'un GitHub Actions'ta
+   göründüğü isim neyse `contexts` listesinde TAM O İSİM olmalı)
 
 ### 4. Push et, gerçek bir PR ile test et
 
@@ -126,14 +132,20 @@ bash scripts/lock_ac.sh specs/features/<feature-adi>/acceptance_criteria.yaml
 
 ## Bilinen kısıtlar (henüz çözülmedi)
 
-- **Ledger tüm projeler arasında paylaşılıyor** — `verification_pipeline`
-  Postgres DB'si tek, `pr` alanı yalnızca PR numarasıdır, repo adı içermez.
-  İki farklı projede aynı PR numarası varsa (olası, her repo kendi
-  numaralandırmasını yapıyor) ledger karışabilir. Şu an tek proje aktif
-  olduğu için sorun değil — birden fazla proje eş zamanlı gerçek kullanıma
-  geçtiğinde `ledger_entries` tablosuna bir `repo` kolonu eklenmesi gerekecek.
 - **Claude (Builder/Orchestrator) CI'dan otomatik çağrılmıyor** — yalnızca
   Codex review otomatik. Kod yazdırmak için hâlâ elle bir Claude Code
   oturumu açman gerekiyor (bkz. HANDOFF.md madde 4.2.3).
-- **`ci.yml` stack tespiti otomatik değil** — madde 3'teki uyarlama her
-  proje için tekrar elle yapılmalı.
+- **`generate_ci_workflow.py`'nin tespiti sınırlı** — yalnızca bilinen
+  klasör adlarına (`frontend/`, `backend/`, `client/`, `server/`, `web/`,
+  `app/`, `api/`, kök dizin) bakıyor. Farklı bir isim kullanıyorsan
+  (`services/api/` gibi) script'teki `NODE_SUBDIRS`/`PYTHON_SUBDIRS`
+  listesine eklemen gerekir.
+
+## Çözülmüş kısıtlar (referans için)
+
+- ✅ **Ledger repo izolasyonu**: `ledger_entries` tablosuna `repo` kolonu
+  eklendi (zorunlu, fail-closed) — artık iki farklı projenin aynı PR
+  numarası ledger'da karışmıyor.
+- ✅ **`ci.yml` stack tespiti otomatik**: `scripts/generate_ci_workflow.py`,
+  `install_pipeline.sh` tarafından otomatik çağrılıyor, elle YAML yazmaya
+  gerek yok.
