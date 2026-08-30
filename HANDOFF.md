@@ -507,12 +507,29 @@ GERÇEK org repo'suna karşı değil, ayrı bir scratch/test repo'suna karşı
    kayıtlarında bu alan yoksa fail-closed olarak ham `blocking` sayısına
    geri dönüyor). 6 yeni pytest testi (gerçek Postgres'e karşı). PR #30.
 
-**Hâlâ yapılmadı (Şef'in listesinde 6 ve 7)**:
-- Feature 6 — Maliyet/kullanım görünürlüğü (kademeli Telegram eşikleri).
-- Feature 7 — Yetkili durdur/devam + süreli istisna (Telegram komut
-  dinleme). Bunlar önceden ERTELENMİŞTİ ("zor diyorsan yapmayalım"), Şef
-  bu turda "1'den 7'ye hepsini yapalım" diyerek yeniden onayladı — sıradaki
-  iş bu ikisi.
+6. ✅ **Maliyet/kullanım görünürlüğü**: `orchestrator/usage_tracker.py` —
+   her `codex exec review` çağrısı Postgres'te (`usage_daily`) günlük
+   sayaç olarak izleniyor. WARN/CRITICAL eşiği (varsayılan 10/20, `.env`
+   ya da CI'da repo Variables ile ayarlanabilir) aşılırsa Telegram'a
+   bildirim gidiyor — **pipeline ASLA otomatik durmuyor** (claude.md
+   politikası), aynı eşik için günde yalnızca bir kez bildirim. 5 yeni
+   pytest testi. PR #32.
+7. ✅ **Yetkili durdur/devam + süreli istisna** (önceden "zor diyorsan
+   yapmayalım" denilerek ERTELENMİŞTİ, Şef "1'den 7'ye hepsini yapalım"
+   diyerek yeniden onayladı): `orchestrator/pipeline_control.py` (repo
+   genelinde KASITLI durdurma — circuit breaker'dan farklı, otomatik
+   değil) + `orchestrator/telegram_commands.py`. Kalıcı bir Telegram bot
+   daemon'u KURULMADI — event-driven mimari korunarak
+   `verification-gate` job'unun her çalışmasında Telegram `getUpdates`
+   bir kez sorgulanıyor. Komutlar: `/durdur <repo> <sebep>`, `/devam
+   <repo>`, `/kabul <repo> <fingerprint> <saat|kalici> <sebep>` (madde
+   5'teki finding_triage'a süreli istisna eklendi — `accepted_until`
+   kolonu, süre dolunca bulgu tekrar bloklayıcı sayılıyor). Yalnızca
+   yapılandırılmış TELEGRAM_CHAT_ID'den gelen komutlar işleniyor. 14 yeni
+   pytest testi (gerçek Postgres + mock'lanmış Telegram API). PR #33.
+
+**Codex'in önerdiği 8 özelliğin TAMAMI şimdi tamamlandı (1-7, madde 1
+zaten tek özellik).**
 
 ## 5. Önemli dosyalar / nereye bakılır
 
