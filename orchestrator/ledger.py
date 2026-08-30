@@ -219,6 +219,7 @@ def _summarize_entries(repo: str, pr_number: int, entries: list[dict]) -> dict:
         "approved_by": None,
         "secret_leak_blocking": False,
         "secret_rotation_confirmed": False,
+        "trufflehog_status": None,
     }
     for e in entries:
         event, data = e["event"], e.get("data", {})
@@ -239,6 +240,8 @@ def _summarize_entries(repo: str, pr_number: int, entries: list[dict]) -> dict:
         elif event == "secret_rotation_confirmed":
             summary["secret_leak_blocking"] = False
             summary["secret_rotation_confirmed"] = True
+        elif event == "trufflehog_result":
+            summary["trufflehog_status"] = data.get("status")
     return summary
 
 

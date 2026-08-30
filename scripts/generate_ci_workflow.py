@@ -225,6 +225,47 @@ jobs:
         run: |
           gitleaks detect --source=. --redact --verbose --log-opts="origin/main..HEAD"
 
+      - name: Güvenilir sonuç işleyicisini main'den stage'le
+        # Codex review bulgusu (P1): TruffleHog hiçbir workflow'a bağlı
+        # değildi. Şimdi buraya eklendi — ve sonucu işleyen script de
+        # (PR'ın kendi checkout'undan çalıştırılırsa etkisizleştirilebileceği
+        # için) izole bir dizinden çalıştırılıyor.
+        id: stage
+        run: |
+          TRUSTED_DIR=$(git show origin/main:scripts/stage_trusted_orchestrator.sh | bash -s -- "$RUNNER_TEMP/trusted-orchestrator")
+          echo "dir=$TRUSTED_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: TruffleHog ile doğrulanmış secret taraması
+        id: trufflehog
+        run: |
+          set +e
+          trufflehog git file://. \
+            --since-commit=origin/main \
+            --branch="${{ github.event.pull_request.head.sha }}" \
+            --only-verified --json > trufflehog_output.jsonl 2> trufflehog_stderr.log
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Python kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Orchestrator bağımlılıklarını kur
+        run: pip install -r "${{ steps.stage.outputs.dir }}/orchestrator/requirements.txt"
+
+      - name: TruffleHog sonucunu işle (ERROR/OK ayrımı net — sessiz "temiz" varsayımı YOK)
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 "${{ steps.stage.outputs.dir }}/orchestrator/trufflehog_result.py" \
+            trufflehog_output.jsonl \
+            --pr "$PR_NUMBER" \
+            --pr-url "$PR_URL" \
+            --head-sha "$HEAD_SHA" \
+            --scan-exit-code "${{ steps.trufflehog.outputs.exit_code }}"
+
   ac-lock-check:
     name: AC Lock Bütünlüğü
     runs-on: [self-hosted, macOS, ARM64]
