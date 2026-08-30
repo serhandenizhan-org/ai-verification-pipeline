@@ -6,7 +6,25 @@ onaylı, denetlenebilir ve fail-closed otonom yazılım geliştirme sistemi.
 Tam mimari dokümanı için ekip içi PDF'e bakın. Bu repo, o spesifikasyonun
 çalışan iskeletidir.
 
-## Hızlı Kurulum
+## Yeni bir projeye bağlama
+
+Bu repo, kendi başına çalışan bir proje değil — **her yeni projeye tek
+komutla bağlanan bir şablon/bootstrap** olarak tasarlandı (bkz. HANDOFF.md
+madde 1). Yeni bir projede kurmak için, bu repodan:
+
+```bash
+bash scripts/install_pipeline.sh /path/to/new-project [owner/repo]
+```
+
+`owner/repo` verilirse (ve `gh` o repoya erişebiliyorsa) label'lar ve
+branch protection da otomatik kurulur. Script neyi kopyalayıp neyi
+kopyalamadığını (özellikle `ci.yml` — bu proje stack'ine özel olduğu için
+elle uyarlanır) kendi başında detaylı açıklıyor. Mac mini'de bir kere
+kurulması gereken ön koşullar (gitleaks, trufflehog, PostgreSQL, `codex
+login`, self-hosted runner) proje başına tekrarlanmaz — bunlar host
+seviyesinde, script'in sonunda listeleniyor.
+
+## Bu repoda yerel geliştirme / test için Hızlı Kurulum
 
 ```bash
 # 1. Ortam değişkenlerini kopyala ve doldur
