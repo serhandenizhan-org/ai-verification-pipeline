@@ -241,7 +241,60 @@ etmez/durdurmaz — sadece Telegram'dan Şef'e bildirir, rotation her zaman
     `enforce_admins: false` — GitHub zaten kendi PR'ını onaylamana izin
     vermiyor, bu yüzden solo projelerde review zorunluluğu pratik değil.
 
-### 4.2 HENÜZ YAPILMADI
+### 4.2 TAMAMLANDI — ikinci oturum bölümü (aynı gün, devamı)
+
+1. ✅ **Orchestrator/Builder ayrımı, Şef'in isteğiyle netleştirildi**: Şef
+   sabit, ayrı iki Claude Code sohbet penceresi istedi (sürekli "sen
+   builder'sın" dememek için). Çözüm: `.claude/settings.json` (`{"model":
+   "opus"}`) bu repoya eklendi — bu repo artık Orchestrator'ın SABİT
+   çalışma alanı, buraya her Claude Code açılışında otomatik Opus. Yeni
+   projeler için `specs/builder_claude_template.md` (Builder-only kurallar,
+   Orchestrator içeriği YOK) yazıldı — `install_pipeline.sh` artık bunu
+   hedef projenin `CLAUDE.md`'si olarak kopyalıyor + `.claude/settings.json`
+   (`{"model": "sonnet"}`) oluşturuyor. Test edildi (dosya içerikleri doğru
+   üretiliyor), ama **model pinning'in gerçekten çalıştığı Şef tarafından
+   henüz canlı doğrulanmadı** (yeni bir oturum açıp sağ altta Opus/Sonnet
+   yazdığını görmesi gerekiyor — bu oturumun kendisi ayarı oluşturmadan
+   önce başladığı için hâlâ Sonnet gösteriyordu).
+2. ✅ **`NEW_PROJECT_SETUP.md` yazıldı** — `install_pipeline.sh`'in
+   otomatikleştirmediği HER ŞEYİN (`.env` doldurma, `ci.yml.example`
+   uyarlama, ilk PR testi, ilk feature AC'si, Orchestrator↔Builder akışı)
+   adım adım kılavuzu. Bilinen kısıtlar da (paylaşımlı ledger, Claude'un
+   CI'dan otomatik çağrılmaması) orada belgelendi.
+3. ✅ **Codex mobil/Desktop app takibi çözüldü — GERÇEKTEN test edildi**:
+   Şef'in "Codex'i ChatGPT masaüstü/mobil uygulamasından izlemek istiyorum"
+   sorusuna cevap. Önce yanlış varsayım: GitHub'da "Installed GitHub Apps"
+   altında ayrı bir "repo bağlama/configure" adımı olduğu düşünüldü — ama
+   Şef kontrol edince "ChatGPT Codex Connector" yalnızca "Authorized GitHub
+   Apps" (OAuth, sadece revoke edilebilir) altında çıktı, "Installed"da HİÇ
+   yok. Gerçek mekanizma çok daha basitmiş: **PR'a `@codex review` yorumu
+   atmak yeterli** — bu, hesap seviyesinde (repo bazlı bağlama YOK) ChatGPT/
+   Codex Desktop + mobil app'in "Pull request'ler" sekmesinde PR'ı otomatik
+   gösteriyor (checks, yorumlar, aktivite akışıyla birlikte). Gerçek bir
+   test PR'ı (#9) açılıp yorum atılıp Desktop app'te (computer-use ile
+   ekran görüntüsü alınarak) görünürlüğü doğrulandıktan sonra PR kapatıldı,
+   `verification.yml`'e kalıcı olarak eklendi (`codex-review` job'unda,
+   asıl CLI review'dan önce bir adım). Bu, gating kararını DEĞİŞTİRMİYOR
+   — yalnızca görünürlük içindir, asıl karar hâlâ CLI review + ledger'da.
+4. ✅ `.codex/` (Codex Desktop app'in yerel proje ortam config'i,
+   `.codex/environments/environment.toml`) `.gitignore`'a eklendi — Ortamlar
+   sayfasında bu repoyu "+" ile eklerken kendiliğinden oluşmuştu, commit'e
+   girmemesi gerekiyordu.
+5. ⚠️ **ÖNEMLİ BULUNAN AMA HENÜZ ÇÖZÜLMEMİŞ GERÇEK SORUN**: `verification.yml`
+   içindeki `risk-routing` job'ı `if: github.event.workflow_run.conclusion
+   == 'success'` koşuluyla çalışıyor — yani Fast CI BAŞARISIZ olursa
+   (bu repoda HER ZAMAN başarısız oluyor, çünkü `ci.yml` hâlâ Node-only
+   şablon ve gerçek bir proje yok) `risk-routing` VE ONA BAĞLI
+   `codex-review` job'u HİÇ ÇALIŞMIYOR. Yani şu ana kadarki tüm Codex
+   review testleri (dogfooding, `@codex review` mobil takip testi)
+   `codex exec review`'in DOĞRUDAN elle (CLI'dan) çalıştırılmasıyla ya da
+   `gh pr comment` ile manuel tetiklenerek yapıldı — **gerçek bir
+   `workflow_run` tetiklemesiyle uçtan uca hiç test edilmedi**. Gerçek bir
+   proje eklenip `ci.yml` uyarlanıp Fast CI gerçekten yeşile çekilmeden bu
+   asla doğrulanamaz. Bu, bir sonraki gerçek projede MUTLAKA ilk test
+   edilmesi gereken şey.
+
+### 4.3 HENÜZ YAPILMADI
 
 1. Telegram bot'a komut dinleme (`getUpdates` polling) eklenmesi —
    `/durdur`, `/devam` gibi komutlar için. **Şef bu turda bunu ERTELEDİ**
