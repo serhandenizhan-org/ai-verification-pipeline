@@ -50,9 +50,23 @@ def _database_url() -> str:
     return os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
 
 
+# Sabit advisory lock ID — şema init'ini eşzamanlı bağlantılar arasında
+# serileştirmek için (bkz. Codex review bulgusu: "IF NOT EXISTS" tek başına
+# concurrent DDL'i yarış durumundan korumuyor, aynı anda bağlanan iki PR
+# job'ı duplicate-key hatası alabiliyordu). Rastgele seçilmiş bir sayı,
+# yalnızca bu uygulamaya özel bir lock namespace'i olması yeterli.
+_SCHEMA_INIT_LOCK_ID = 847_291_003
+
 def _connect() -> psycopg.Connection:
     conn = psycopg.connect(_database_url(), row_factory=dict_row)
     with conn.cursor() as cur:
+        # xact-scoped lock: yalnızca bu transaction COMMIT/ROLLBACK olana
+        # kadar tutulur, serbest bırakma sırası elle yönetilmiyor — bir
+        # önceki denemede unlock'u commit'ten ÖNCE çağırmak, tablo henüz
+        # commit edilmeden başka bir bağlantının lock'u alıp aynı
+        # CREATE TABLE'ı tekrar denemesine (duplicate-key hatası) yol
+        # açıyordu. xact_lock bunu yapısal olarak imkansız kılıyor.
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_INIT_LOCK_ID,))
         cur.execute(_SCHEMA)
     conn.commit()
     return conn
