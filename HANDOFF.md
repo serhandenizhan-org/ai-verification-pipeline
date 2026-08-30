@@ -456,12 +456,8 @@ gerçek testlerle (çoğu gerçek saldırı/bypass simülasyonuyla) tamamlandı.
   (eskiden "1 onay zorunlu" yazıyordu, bu solo projede PR'ları kalıcı
   kilitlerdi).
 
-**Bilinçli olarak ele alınmayan (Codex'in önerdiği yeni özellikler)**:
-PR doğrulama özeti (tek güncellenen yorum), AC-test izlenebilirliği,
-sürümlü merkezi pipeline paketi, stack profilleri + kurulum doğrulayıcısı,
-bulgulara kalıcı kimlik + triage geçmişi, maliyet/kullanım görünürlüğü,
-yetkili durdur/devam + süreli istisna, izole preview + keşifsel QA — bunlar
-YENİ ÖZELLİK önerileri, bug fix değil, Şef henüz bunları istemedi.
+**Şef "yeni özellikleri de değerlendirelim" dedi, sonra "1'den 7'ye hepsini
+yapalım" dedi** — aşağıda bu özelliklerin durumu (bkz. 4.7).
 
 **DİKKAT — bu oturumda tekrarlanan bir ders**: `install_pipeline.sh`'i
 gerçek `serhandenizhan-org/ai-verification-pipeline` reposuna karşı test
@@ -472,6 +468,51 @@ postlanmaz, PR'lar kalıcı "pending" kalırdı. Fark edilip hemen geri
 alındı. **install_pipeline.sh'in owner/repo argümanını test ederken
 GERÇEK org repo'suna karşı değil, ayrı bir scratch/test repo'suna karşı
 çalıştırılmalı.**
+
+### 4.7 TAMAMLANDI — Codex'in önerdiği 8 yeni özellikten 1-2-3-4-5 (Şef: "1'den 7'ye hepsini yapalım")
+
+1. ✅ **Tek güncellenen PR yorumu**: `verifier.py`'ye `cmd_render_comment` +
+   paylaşılan `_evaluate_gate` helper'ı eklendi. `codex-review` job'u artık
+   kendi PR yorumunu atmıyor; tüm rapor metni + tedarik zinciri raporu
+   `record-codex --report-file/--deps-report-file` ile ledger'a yazılıyor,
+   `verification-gate` job'u BUNLARI okuyup TEK bir Markdown yorumu
+   oluşturuyor/günceliyor (`<!-- ai-verification-pipeline:status -->`
+   marker'ıyla bulunuyor, `gh api ... --jq` + PATCH-veya-create). PR #29.
+2. ✅ **AC-test izlenebilirliği**: `scripts/check_ac_traceability.py` — her
+   feature'ın AC ID'lerini kilitli `acceptance_criteria.yaml`'dan, kanıtı
+   ise AYRI (kilitlenmeyen) `specs/features/<feature>/evidence.yaml`'dan
+   okuyup eksik kanıtları raporlar. **ADVISORY'dir, gate'i bloklamaz** —
+   `ac-lock-check` job'una eklendi. PR #30.
+3. ✅ **Sürüm takibi + kurulum doğrulayıcısı**: `PIPELINE_VERSION` +
+   `.pipeline-meta.json` (version/source_commit/installed_at) her hedef
+   projeye yazılıyor; `scripts/check_pipeline_version.sh` sürüm sapmasını
+   tespit ediyor (otomatik upgrade YAPMIYOR — `install_pipeline.sh`'i
+   tekrar çalıştırmak, zaten yedekleme-güvenli olduğu için upgrade
+   yoludur). PR #28.
+4. ✅ **Kurulum sağlık kontrolü**: `scripts/doctor.py` — host araçları
+   (gitleaks/trufflehog/docker/codex/gh), Docker daemon, Postgres
+   bağlantısı, proje-yerel dosyalar, ve (`--repo` ile) GitHub tarafı
+   (runner online sayısı, GitHub Secrets varlığı, branch protection'ın
+   GERÇEKTEN `verification-gate`'i zorunlu kılıp kılmadığı). Gerçek org
+   repo'suna karşı test edildi. PR #28.
+5. ✅ **Bulgulara kalıcı kimlik + triage geçmişi**:
+   `orchestrator/finding_triage.py` — her Codex bulgusuna
+   `severity+title+file:line`'dan türetilen stabil bir sha256 fingerprint,
+   Postgres'te (`finding_history` tablosu) ilk/son görülme + tekrar sayısı
+   izleniyor. Bir P1, `finding_triage.py accept <repo> <fingerprint>
+   <accepted_by> <reason>` ile (yalnızca bir insan ismiyle, boş
+   `accepted_by` reddediliyor) 'accepted' işaretlenirse, gate artık O
+   SPESİFİK bulguyu bloklamıyor — kabul edilmemiş diğer BLOCKING bulgular
+   bloklamaya devam ediyor (`unaccepted_blocking_count`, eski ledger
+   kayıtlarında bu alan yoksa fail-closed olarak ham `blocking` sayısına
+   geri dönüyor). 6 yeni pytest testi (gerçek Postgres'e karşı). PR #30.
+
+**Hâlâ yapılmadı (Şef'in listesinde 6 ve 7)**:
+- Feature 6 — Maliyet/kullanım görünürlüğü (kademeli Telegram eşikleri).
+- Feature 7 — Yetkili durdur/devam + süreli istisna (Telegram komut
+  dinleme). Bunlar önceden ERTELENMİŞTİ ("zor diyorsan yapmayalım"), Şef
+  bu turda "1'den 7'ye hepsini yapalım" diyerek yeniden onayladı — sıradaki
+  iş bu ikisi.
 
 ## 5. Önemli dosyalar / nereye bakılır
 
