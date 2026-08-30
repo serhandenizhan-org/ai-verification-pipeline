@@ -62,7 +62,7 @@ def build_rotation_checklist(pr_number: int, redacted_findings: list[dict]) -> s
     )
 
 
-def trigger(pr_number: int, pr_url: str, redacted_findings: list[dict]) -> None:
+def trigger(repo: str, pr_number: int, pr_url: str, redacted_findings: list[dict]) -> None:
     """Alert + rotate akışının tamamını tetikler."""
     summary_lines = [
         f"{f['detector']} — {f['file']}:{f['line']}" for f in redacted_findings
@@ -70,13 +70,14 @@ def trigger(pr_number: int, pr_url: str, redacted_findings: list[dict]) -> None:
     summary = "\n".join(summary_lines)
 
     notifier.send_telegram_message(
-        f"🚨🚨 *DOĞRULANMIŞ SECRET SIZINTISI — PR #{pr_number}*\n\n"
+        f"🚨🚨 *DOĞRULANMIŞ SECRET SIZINTISI — {repo} PR #{pr_number}*\n\n"
         f"{summary}\n\n"
         f"Bu secret'lar AKTİF olduğu doğrulandı. Hemen rotate edilmeli.\n"
         f"[PR'ı incele]({pr_url})"
     )
 
     ledger.append_entry(ledger.LedgerEntry(
+        repo=repo,
         pr=pr_number,
         event="secret_alert_triggered",
         data={"findings": redacted_findings, "severity": "BLOCKING"},
@@ -89,9 +90,10 @@ def trigger(pr_number: int, pr_url: str, redacted_findings: list[dict]) -> None:
     # bu çıktıyı `gh pr comment` ile PR'a yazar (bkz. verification.yml).
 
 
-def record_rotation_confirmed(pr_number: int, confirmed_by: str) -> None:
+def record_rotation_confirmed(repo: str, pr_number: int, confirmed_by: str) -> None:
     """Şef rotasyonu tamamladığını onayladığında çağrılır — bloğu kaldırır."""
     ledger.append_entry(ledger.LedgerEntry(
+        repo=repo,
         pr=pr_number,
         event="secret_rotation_confirmed",
         data={"confirmed_by": confirmed_by},
@@ -100,18 +102,20 @@ def record_rotation_confirmed(pr_number: int, confirmed_by: str) -> None:
 
 if __name__ == "__main__":
     import argparse
+    import os
 
     parser = argparse.ArgumentParser(description="Alert & Rotate CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_confirm = sub.add_parser("confirm-rotated")
+    p_confirm.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
     p_confirm.add_argument("pr", type=int)
     p_confirm.add_argument("confirmed_by")
 
     args = parser.parse_args()
 
     if args.command == "confirm-rotated":
-        record_rotation_confirmed(args.pr, args.confirmed_by)
-        print(f"Rotasyon onayı kaydedildi: PR #{args.pr} by {args.confirmed_by}")
+        record_rotation_confirmed(args.repo, args.pr, args.confirmed_by)
+        print(f"Rotasyon onayı kaydedildi: {args.repo} PR #{args.pr} by {args.confirmed_by}")
     else:
         sys.exit(1)
