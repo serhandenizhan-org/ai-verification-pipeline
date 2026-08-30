@@ -3,6 +3,13 @@
 # Not: lint/typecheck/unit/build adımları proje stack'ine göre uyarlanmalıdır
 # (bu dosya Node.js varsayımıyla örneklenmiştir — Python projede ilgili
 # adımları değiştirin).
+#
+# SANDBOX NOTU: Runner self-hosted VE macOS (Mac mini) olduğu için GitHub
+# Actions'ın native `container:` job anahtarı KULLANILAMAZ — bu özellik
+# resmi olarak yalnızca Linux runner'larda destekleniyor. Bunun yerine,
+# untrusted PR kodunu çalıştıran adımlar doğrudan `docker run` ile bir
+# container içinde izole ediliyor (workspace bind-mount edilir, container
+# iş bitince --rm ile silinir). Host'a doğrudan npm/node kurulmuyor.
 
 name: Fast CI
 
@@ -17,54 +24,47 @@ permissions:
 jobs:
   secret-scan:
     name: Secret Scan (gitleaks)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64]
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: gitleaks tara
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_ENABLE_SUMMARY: "true"
+        # gitleaks/gitleaks-action@v2 artık lisans istiyor (ücretli) —
+        # ücretsiz CLI'ı (self-hosted runner'da zaten kurulu) doğrudan
+        # çağırıyoruz, wrapper action'a gerek yok.
+        run: |
+          gitleaks detect --source=. --redact --verbose --log-opts="origin/main..HEAD"
 
   lint-typecheck-unit-build:
     name: Lint / Typecheck / Unit / Build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64]
     needs: secret-scan
     steps:
       - uses: actions/checkout@v4
 
-      - name: Node.js kur
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-
-      - name: Bağımlılıkları kur
-        run: npm ci
-
-      - name: Bilinen güvenlik açıklarını tara
-        run: npm audit --audit-level=high
-
-      - name: AC lock bütünlüğünü doğrula
-        run: bash scripts/verify_ac_lock.sh
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Type check
-        run: npm run typecheck
-
-      - name: Unit + integration testler
-        run: npm test -- --ci
-
-      - name: Build
-        run: npm run build
+      - name: Bağımlılık kur + lint + typecheck + test + build (container içinde, izole)
+        run: |
+          docker run --rm \
+            --cap-drop=ALL \
+            --security-opt=no-new-privileges:true \
+            --network=bridge \
+            -v "$PWD":/workspace -w /workspace \
+            node:20-bookworm-slim \
+            bash -c "
+              set -euo pipefail
+              npm ci
+              npm audit --audit-level=high
+              bash scripts/verify_ac_lock.sh
+              npm run lint
+              npm run typecheck
+              npm test -- --ci
+              npm run build
+            "
 
   e2e-playwright:
     name: Playwright E2E
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64]
     needs: lint-typecheck-unit-build
     env:
       # Guard: STRIPE_SECRET_KEY yanlışlıkla sk_live_ ile başlarsa pipeline durur.
@@ -72,23 +72,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Node.js kur
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-
-      - name: Bağımlılıkları kur
-        run: npm ci
-
-      - name: Stripe key modunu doğrula (test mode zorunlu)
-        run: bash scripts/check_stripe_key_mode.sh
-
-      - name: Playwright tarayıcılarını kur
-        run: npx playwright install --with-deps
-
-      - name: E2E testleri çalıştır
-        run: npx playwright test
+      - name: Bağımlılık kur + Stripe key kontrolü + E2E testleri (container içinde, izole)
+        run: |
+          # mcr.microsoft.com/playwright imajı Node + tarayıcıları hazır getiriyor,
+          # ayrıca --ipc=host chromium'un shared-memory crash'ini önlüyor
+          # (bu adımda cap-drop kullanmıyoruz, chromium sandbox'ı ile çakışıyor).
+          docker run --rm \
+            --ipc=host \
+            -e STRIPE_SECRET_KEY="$STRIPE_SECRET_KEY" \
+            -v "$PWD":/workspace -w /workspace \
+            mcr.microsoft.com/playwright:v1.48.0-jammy \
+            bash -c "
+              set -euo pipefail
+              npm ci
+              bash scripts/check_stripe_key_mode.sh
+              npx playwright test
+            "
 
       - name: Test raporunu artifact olarak yükle
         if: always()

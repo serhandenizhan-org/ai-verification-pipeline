@@ -25,7 +25,7 @@ jobs:
   risk-routing:
     name: Risk Routing
     if: github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64]
     outputs:
       risk_level: ${{ steps.risk.outputs.risk_level }}
       required_checks: ${{ steps.risk.outputs.required_checks }}
@@ -60,7 +60,7 @@ jobs:
     name: Reviewer Codex (deep review)
     needs: risk-routing
     if: needs.risk-routing.outputs.risk_level != 'LOW'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -119,7 +119,7 @@ jobs:
     name: Low Risk — Doğrudan Şef Onayına Geç
     needs: risk-routing
     if: needs.risk-routing.outputs.risk_level == 'LOW'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64]
     steps:
       - uses: actions/checkout@v4
       - name: PR'ı Şef onayı için işaretle
