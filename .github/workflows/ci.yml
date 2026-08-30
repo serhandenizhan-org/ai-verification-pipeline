@@ -23,10 +23,11 @@ jobs:
         with:
           fetch-depth: 0
       - name: gitleaks tara
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_ENABLE_SUMMARY: "true"
+        # gitleaks/gitleaks-action@v2 artık lisans istiyor (ücretli) —
+        # ücretsiz CLI'ı (self-hosted runner'da zaten kurulu) doğrudan
+        # çağırıyoruz, wrapper action'a gerek yok.
+        run: |
+          gitleaks detect --source=. --redact --verbose --log-opts="origin/main..HEAD"
 
   lint-typecheck-unit-build:
     name: Lint / Typecheck / Unit / Build
