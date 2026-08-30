@@ -17,7 +17,7 @@ permissions:
 jobs:
   secret-scan:
     name: Secret Scan (gitleaks)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,7 +30,7 @@ jobs:
 
   lint-typecheck-unit-build:
     name: Lint / Typecheck / Unit / Build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64]
     needs: secret-scan
     steps:
       - uses: actions/checkout@v4
@@ -64,7 +64,7 @@ jobs:
 
   e2e-playwright:
     name: Playwright E2E
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64]
     needs: lint-typecheck-unit-build
     env:
       # Guard: STRIPE_SECRET_KEY yanlışlıkla sk_live_ ile başlarsa pipeline durur.
