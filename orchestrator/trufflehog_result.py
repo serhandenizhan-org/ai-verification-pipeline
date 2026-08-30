@@ -62,8 +62,11 @@ def redact_finding(record: dict) -> dict:
 
 
 def main() -> int:
+    import os
+
     parser = argparse.ArgumentParser(description="TruffleHog sonuç işleyici")
     parser.add_argument("jsonl_path", type=Path)
+    parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
     parser.add_argument("--pr", type=int, required=True)
     parser.add_argument("--pr-url", required=True)
     args = parser.parse_args()
@@ -73,6 +76,7 @@ def main() -> int:
     if not verified_findings:
         print("TruffleHog: doğrulanmış (verified) secret bulunamadı. Devam ediliyor.")
         ledger.append_entry(ledger.LedgerEntry(
+            repo=args.repo,
             pr=args.pr,
             event="trufflehog_result",
             data={"verified_secrets_found": 0},
@@ -82,12 +86,14 @@ def main() -> int:
     redacted = [redact_finding(r) for r in verified_findings]
 
     ledger.append_entry(ledger.LedgerEntry(
+        repo=args.repo,
         pr=args.pr,
         event="trufflehog_result",
         data={"verified_secrets_found": len(redacted), "findings": redacted},
     ))
 
     alert_and_rotate.trigger(
+        repo=args.repo,
         pr_number=args.pr,
         pr_url=args.pr_url,
         redacted_findings=redacted,
