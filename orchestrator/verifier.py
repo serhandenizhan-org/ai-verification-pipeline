@@ -100,11 +100,34 @@ def cmd_record_codex(args: argparse.Namespace) -> int:
     findings = json.loads(args.findings_json) if args.findings_json else {}
     blocking_count = findings.get("blocking", 0)
 
+    # Codex'in önerdiği özellik: tek güncellenen PR yorumu. Rapor metnini
+    # (ve varsa tedarik zinciri raporunu) ledger'a da yazıyoruz ki
+    # verification-gate job'u AYRI bir dosya paylaşımına ihtiyaç duymadan
+    # (farklı bir runner job'unda çalıştığı için codex_last_message.txt'e
+    # erişemez) tek, kapsamlı bir yorum oluşturabilsin.
+    report_text = ""
+    if args.report_file:
+        try:
+            report_text = open(args.report_file, encoding="utf-8").read()
+        except OSError:
+            pass
+    deps_report = None
+    if args.deps_report_file:
+        try:
+            deps_report = json.loads(open(args.deps_report_file, encoding="utf-8").read())
+        except (OSError, json.JSONDecodeError):
+            pass
+
     ledger.append_entry(ledger.LedgerEntry(
         repo=args.repo,
         pr=args.pr,
         event="codex_result",
-        data={"status": args.status, "findings": findings},
+        data={
+            "status": args.status,
+            "findings": findings,
+            "report_text": report_text,
+            "deps_report": deps_report,
+        },
         head_sha=args.head_sha,
         run_id=args.run_id,
     ))
@@ -156,32 +179,37 @@ def cmd_summary(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_gate(args: argparse.Namespace) -> int:
+# Marker: PR yorumlarında BU pipeline'ın "durum yorumu"nu bulmak için
+# kullanılır (workflow, bu satırla başlayan yorumu arayıp günceller,
+# her run'da yeni yorum biriktirmek yerine).
+MARKER = "<!-- ai-verification-pipeline:status -->"
+
+
+def _evaluate_gate(repo: str, pr: int, head_sha: str) -> tuple[str, str, dict]:
     """
-    TEK bağlayıcı merge kararı. Yalnızca `--head-sha` ile verilen commit'e
-    ait ledger olaylarına bakar (eski bir commit'in sonucu asla kullanılmaz)
-    ve şu sırayla kontrol eder:
+    TEK bağlayıcı merge kararının mantığı. Yalnızca `head_sha` ile verilen
+    commit'e ait ledger olaylarına bakar (eski bir commit'in sonucu asla
+    kullanılmaz) ve şu sırayla kontrol eder:
 
       1. Circuit breaker tripped mi? -> FAIL
-      2. Bu commit için risk hesaplanmış mı (Fast CI + risk-routing
-         çalışmış mı)? -> hesaplanmamışsa FAIL (Fast CI başarısız/hiç
-         çalışmamış demektir)
-      3. Doğrulanmış bir secret sızıntısı bloklanmış mı (rotasyon onayı
-         gelmemiş)? -> FAIL
-      4. Risk LOW ise: yalnızca yukarıdakiler yeterli -> PASS
-      5. Risk LOW değilse: Codex sonucu bu commit için var mı, PASS mi,
-         blocking=0 mı? -> hepsi sağlanmıyorsa FAIL
+      2. Doğrulanmış bir secret sızıntısı bloklanmış mı? -> FAIL
+      3. TruffleHog bu commit için 'OK' mü? -> değilse FAIL
+      4. Risk hesaplanmış mı? -> hesaplanmamışsa FAIL
+      5. Risk LOW ise: yukarıdakiler yeterli -> PASS
+      6. Risk LOW değilse: Codex sonucu var mı, PASS mi, blocking=0 mı?
+         -> hepsi sağlanmıyorsa FAIL
 
-    Çıktı: {"decision": "PASS"|"FAIL", "reason": "..."} JSON, stdout'a.
-    Exit code: PASS ise 0, FAIL ise 1.
+    Döndürür: (decision, reason, summary) — summary, cmd_render_comment'in
+    tam yorum metnini oluşturmak için kullandığı ledger özetidir (rapor
+    metni, tedarik zinciri raporu dahil).
     """
-    if circuit_breaker.is_tripped(args.repo, args.pr):
-        return _gate_result("FAIL", "Circuit breaker tripped — Şef'in reset onayı gerekiyor.")
+    if circuit_breaker.is_tripped(repo, pr):
+        return "FAIL", "Circuit breaker tripped — Şef'in reset onayı gerekiyor.", {}
 
-    summary = ledger.summarize_for_gate(args.repo, args.pr, args.head_sha)
+    summary = ledger.summarize_for_gate(repo, pr, head_sha)
 
     if summary.get("secret_leak_blocking"):
-        return _gate_result("FAIL", "Doğrulanmış secret sızıntısı — rotasyon onayı bekleniyor.")
+        return "FAIL", "Doğrulanmış secret sızıntısı — rotasyon onayı bekleniyor.", summary
 
     # Codex review bulgusu (P1): TruffleHog hiçbir workflow'dan çağrılmıyordu,
     # yani hiçbir zaman engelleyici olamıyordu. Artık gate BU EVENT'İN VAR
@@ -190,41 +218,99 @@ def cmd_gate(args: argparse.Namespace) -> int:
     # yapısal olarak imkansız hale gelir.
     trufflehog_status = summary.get("trufflehog_status")
     if trufflehog_status != "OK":
-        return _gate_result(
+        return (
             "FAIL",
             f"Bu commit için TruffleHog sonucu 'OK' değil (durum: {trufflehog_status!r}) "
             "— tarama hiç çalışmamış, hata vermiş ya da doğrulanmış secret bulmuş olabilir.",
+            summary,
         )
 
     risk_level = summary.get("risk_level")
     if risk_level is None:
-        return _gate_result(
+        return (
             "FAIL",
-            f"Bu commit ({args.head_sha}) için risk hesaplanmamış — Fast CI "
+            f"Bu commit ({head_sha}) için risk hesaplanmamış — Fast CI "
             "başarısız olmuş ya da hiç çalışmamış olabilir.",
+            summary,
         )
 
     if risk_level == "LOW":
-        return _gate_result("PASS", "Risk LOW, Fast CI başarılı — Codex review atlandı (politika gereği).")
+        return "PASS", "Risk LOW, Fast CI başarılı — Codex review atlandı (politika gereği).", summary
 
     codex_status = summary.get("codex")
     codex_findings = summary.get("codex_findings") or {}
     blocking = codex_findings.get("blocking", None)
 
     if codex_status is None:
-        return _gate_result("FAIL", f"Risk {risk_level} — bu commit için Codex sonucu henüz yok.")
+        return "FAIL", f"Risk {risk_level} — bu commit için Codex sonucu henüz yok.", summary
     if codex_status != "PASS":
-        return _gate_result("FAIL", f"Codex review durumu PASS değil: {codex_status}")
+        return "FAIL", f"Codex review durumu PASS değil: {codex_status}", summary
     if blocking is None:
-        return _gate_result("FAIL", "Codex sonucu var ama blocking sayısı okunamadı (eksik/bozuk rapor).")
+        return "FAIL", "Codex sonucu var ama blocking sayısı okunamadı (eksik/bozuk rapor).", summary
     if blocking > 0:
-        return _gate_result("FAIL", f"{blocking} adet BLOCKING Codex bulgusu var.")
+        return "FAIL", f"{blocking} adet BLOCKING Codex bulgusu var.", summary
 
-    return _gate_result("PASS", f"Risk {risk_level}, Fast CI başarılı, Codex PASS, 0 BLOCKING bulgu.")
+    return "PASS", f"Risk {risk_level}, Fast CI başarılı, Codex PASS, 0 BLOCKING bulgu.", summary
 
 
-def _gate_result(decision: str, reason: str) -> int:
+def cmd_gate(args: argparse.Namespace) -> int:
+    decision, reason, _summary = _evaluate_gate(args.repo, args.pr, args.head_sha)
     print(json.dumps({"decision": decision, "reason": reason}, ensure_ascii=False))
+    return 0 if decision == "PASS" else 1
+
+
+def cmd_render_comment(args: argparse.Namespace) -> int:
+    """
+    Codex'in önerdiği özellik: TEK, güncellenen bir PR yorumu. Gate
+    kararını + risk + Codex raporunun tamamı + tedarik zinciri raporunu
+    tek bir Markdown çıktısında birleştirir. Workflow, bu çıktıyı bir
+    "işaretli" (marker) yoruma yazar/günceller — böylece her run'da yeni
+    bir yorum birikmez.
+    """
+    decision, reason, summary = _evaluate_gate(args.repo, args.pr, args.head_sha)
+
+    badge = "✅ PASS" if decision == "PASS" else "❌ FAIL"
+    lines = [
+        MARKER,
+        f"## 🤖 AI Verification Pipeline — PR #{args.pr}",
+        "",
+        f"**Sonuç: {badge}** — {reason}",
+        "",
+        f"**Risk seviyesi:** {summary.get('risk_level', 'bilinmiyor')}",
+        f"**TruffleHog:** {summary.get('trufflehog_status', 'bilinmiyor')}",
+    ]
+
+    codex_status = summary.get("codex")
+    if codex_status is not None:
+        findings = summary.get("codex_findings") or {}
+        lines += [
+            "",
+            "### Reviewer Codex",
+            f"Durum: {codex_status} — {findings.get('blocking', '?')} BLOCKING, "
+            f"{findings.get('advisory', '?')} ADVISORY",
+        ]
+        report_text = summary.get("codex_report_text")
+        if report_text:
+            lines += ["", "<details><summary>Tam rapor</summary>", "", report_text, "", "</details>"]
+
+    deps_report = summary.get("deps_report")
+    if deps_report and deps_report.get("new_dependencies_found"):
+        lines += [
+            "",
+            "### 🔎 Tedarik Zinciri (Supply-Chain)",
+            f"{deps_report['new_dependencies_found']} yeni bağımlılık tespit edildi.",
+            "",
+            "<details><summary>Ham registry metadata'sı</summary>",
+            "",
+            "```json",
+            json.dumps(deps_report, ensure_ascii=False, indent=2),
+            "```",
+            "",
+            "</details>",
+        ]
+
+    lines += ["", "---", f"_head_sha: `{args.head_sha}`_"]
+    print("\n".join(lines))
     return 0 if decision == "PASS" else 1
 
 
@@ -265,6 +351,8 @@ def main() -> int:
     p_codex.add_argument("--failure-text", default="")
     p_codex.add_argument("--head-sha", default="")
     p_codex.add_argument("--run-id", default=default_run_id)
+    p_codex.add_argument("--report-file", default="", help="Codex'in tam rapor metnini içeren dosya (tek PR yorumu için ledger'a yazılır)")
+    p_codex.add_argument("--deps-report-file", default="", help="check_new_dependencies.py çıktısı JSON dosyası")
     p_codex.set_defaults(func=cmd_record_codex)
 
     p_human = sub.add_parser("record-human-approval")
@@ -292,6 +380,12 @@ def main() -> int:
     p_gate.add_argument("--pr", type=int, required=True)
     p_gate.add_argument("--head-sha", required=True, help="Kararın verileceği commit SHA'sı (zorunlu)")
     p_gate.set_defaults(func=cmd_gate)
+
+    p_render = sub.add_parser("render-comment", help="Tek, güncellenen PR yorumu için Markdown üret")
+    p_render.add_argument("--repo", default=default_repo, help="owner/repo (varsayılan: $GITHUB_REPOSITORY)")
+    p_render.add_argument("--pr", type=int, required=True)
+    p_render.add_argument("--head-sha", required=True)
+    p_render.set_defaults(func=cmd_render_comment)
 
     args = parser.parse_args()
     return args.func(args)

@@ -170,35 +170,13 @@ jobs:
           echo "blocking=$BLOCKING" >> "$GITHUB_OUTPUT"
           echo "advisory=$ADVISORY" >> "$GITHUB_OUTPUT"
 
-      - name: Rapor + tedarik zinciri ön raporunu PR'a yorum olarak bırak
-        env:
-          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          {
-            echo "## 🤖 Reviewer Codex — Deep Review"
-            echo ""
-            echo "Bulgu: ${{ steps.findings.outputs.blocking }} BLOCKING, ${{ steps.findings.outputs.advisory }} ADVISORY"
-            echo ""
-            cat codex_last_message.txt
-          } > codex_comment.md
-          gh pr comment "$PR_NUMBER" --body-file codex_comment.md
-
-          if [[ "${{ steps.deps.outputs.found }}" != "0" ]]; then
-            {
-              echo "## 🔎 Tedarik Zinciri (Supply-Chain) Ön Raporu"
-              echo ""
-              echo "Bu PR'da ${{ steps.deps.outputs.found }} yeni bağımlılık tespit edildi,"
-              echo "Codex yukarıdaki incelemede bunu değerlendirdi. Ham veri:"
-              echo ""
-              echo '```json'
-              cat new_deps_report.json
-              echo '```'
-            } > new_deps_comment.md
-            gh pr comment "$PR_NUMBER" --body-file new_deps_comment.md
-          fi
-
-      - name: Sonucu ledger'a yaz
+      - name: Sonucu ledger'a yaz (rapor metni + deps raporu dahil)
+        # Codex'in önerdiği özellik: TEK güncellenen PR yorumu. Rapor
+        # metnini ve tedarik zinciri raporunu ARTIK BURADA PR'a yorum
+        # olarak atmıyoruz — ikisini de ledger'a yazıyoruz, PR yorumunu
+        # (tek, düzenlenen) verification-gate job'u kompoze edip yazıyor
+        # (o job risk+codex+trufflehog'un HEPSİNİ görüyor, burası yalnızca
+        # Codex kısmını).
         env:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           PR_URL: ${{ github.event.workflow_run.pull_requests[0].html_url }}
@@ -216,6 +194,8 @@ jobs:
             --pr-url "$PR_URL" \
             --head-sha "$HEAD_SHA" \
             --run-id "$GITHUB_RUN_ID" \
+            --report-file codex_last_message.txt \
+            --deps-report-file new_deps_report.json \
             --failure-text "codex exec review exit_code=${{ steps.codex.outputs.exit_code }}" || true
           # NOT: record-codex artık BLOCKING varsa 1 dönüyor (defense in
           # depth) — ama bu adımın kendisi FAIL olursa sonraki job'lar
@@ -225,18 +205,16 @@ jobs:
 
   low-risk-fast-path:
     name: Low Risk — Doğrudan Şef Onayına Geç
+    # Codex'in önerdiği özellik (tek PR yorumu) sonrası: bu job'un
+    # PR yorumu/etiket ekleme sorumluluğu verification-gate'e taşındı —
+    # o job risk seviyesinden bağımsız HER ZAMAN çalışıyor ve gate'in
+    # gerçek kararına göre tek, tutarlı bir yorum/etiket seti üretiyor.
+    # Bu job artık yalnızca needs graph'ında bir placeholder.
     needs: risk-routing
     if: needs.risk-routing.outputs.risk_level == 'LOW'
     runs-on: [self-hosted, macOS, ARM64]
     steps:
-      - uses: actions/checkout@v4
-      - name: PR'ı Şef onayı için işaretle
-        env:
-          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh pr edit "$PR_NUMBER" --add-label "ready-for-human-approval"
-          gh pr comment "$PR_NUMBER" --body "Risk seviyesi LOW — Codex review atlandı, doğrudan Şef onayı bekleniyor."
+      - run: echo "Risk LOW — Codex review atlandı, karar verification-gate'te veriliyor."
 
   verification-gate:
     name: Verification Gate
@@ -312,6 +290,33 @@ jobs:
           echo "Karar: $DECISION — $REASON"
           echo "gate_decision=$DECISION" >> "$GITHUB_OUTPUT"
           [[ "$DECISION" == "PASS" ]]
+
+      - name: Tek, güncellenen PR yorumunu oluştur/güncelle (Codex'in önerdiği özellik)
+        # Önceden Codex raporu + tedarik zinciri raporu + LOW-risk mesajı
+        # AYRI yorumlar olarak birikip PR'ı kalabalıklaştırıyordu. Artık
+        # tek bir "işaretli" (MARKER ile başlayan) yorum var — her run'da
+        # YENİ yorum eklenmiyor, var olan GÜNCELLENİYOR.
+        if: always()
+        env:
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 "${{ steps.stage.outputs.dir }}/orchestrator/verifier.py" render-comment \
+            --pr "$PR_NUMBER" --head-sha "$HEAD_SHA" > comment_body.md || true
+
+          MARKER='<!-- ai-verification-pipeline:status -->'
+          EXISTING_ID=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" --paginate \
+            --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" | head -1)
+
+          if [[ -n "$EXISTING_ID" ]]; then
+            gh api "repos/${{ github.repository }}/issues/comments/$EXISTING_ID" \
+              --method PATCH -f body="$(cat comment_body.md)"
+            echo "Var olan durum yorumu güncellendi (id=$EXISTING_ID)."
+          else
+            gh pr comment "$PR_NUMBER" --body-file comment_body.md
+            echo "Yeni durum yorumu oluşturuldu."
+          fi
 
       - name: PR etiketlerini uzlaştır (Codex review bulgusu — P2)
         # "needs-codex-review" incelemeden sonra da takılı kalıyordu,
