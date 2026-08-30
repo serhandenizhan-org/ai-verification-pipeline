@@ -118,6 +118,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh pr edit "$PR_NUMBER" --add-label "needs-codex-review"
 
+      - name: "@codex review yorumu at (ChatGPT/Codex mobil app'te PR takibi için)"
+        # Doğrulandı: bu yorumu atmak, PR'ın hesap seviyesinde bağlı
+        # ChatGPT/Codex Desktop + mobil app'in "Pull request'ler" sekmesinde
+        # görünmesini sağlıyor (checks, yorumlar, aktivite akışıyla birlikte)
+        # — ayrı bir "repo bağlama"/GitHub App kurulumu GEREKMİYOR, hesap
+        # zaten bunu otomatik yakalıyor. Asıl gating kararımızı vermiyor
+        # (onu aşağıdaki CLI review + ledger yapıyor), yalnızca görünürlük içindir.
+        env:
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr comment "$PR_NUMBER" --body "@codex review"
+
       - name: Codex review çalıştır (kör — Orchestrator'ın adversarial notlarını görmez)
         # Talimatlar --base ile birlikte custom PROMPT verilemediği için
         # (codex CLI kısıtı) repo kökündeki AGENTS.md'den otomatik okunuyor
