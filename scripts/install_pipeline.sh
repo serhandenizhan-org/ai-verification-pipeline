@@ -105,7 +105,7 @@ echo "kopyalandı: orchestrator/"
 mkdir -p "$TARGET_DIR/scripts/git-hooks"
 for f in lock_ac.sh verify_ac_lock.sh verify_ac_lock.py check_stripe_key_mode.sh \
          check_new_dependencies.py pin_trusted_files.sh generate_ci_workflow.py \
-         stage_trusted_orchestrator.sh; do
+         stage_trusted_orchestrator.sh doctor.py; do
   safe_copy "$SOURCE_REPO_ROOT/scripts/$f" "$TARGET_DIR/scripts/$f"
 done
 safe_copy "$SOURCE_REPO_ROOT/scripts/git-hooks/pre-commit" "$TARGET_DIR/scripts/git-hooks/pre-commit"
@@ -210,6 +210,22 @@ if [[ -d "$TARGET_DIR/.git" ]]; then
 else
   echo "UYARI: $TARGET_DIR bir git reposu değil, pre-commit hook kurulamadı." >&2
 fi
+
+# --- .pipeline-meta.json (sürüm takibi — Codex'in önerdiği özellik) ---
+# Zamanla kaynak repo güncellenirken hedef projeler geride kalabilir —
+# bu dosya "hangi sürüm/commit'ten kurulduğu"nu kaydeder, böylece
+# scripts/check_pipeline_version.sh ile drift tespit edilebilir.
+PIPELINE_VERSION_VALUE=$(cat "$SOURCE_REPO_ROOT/PIPELINE_VERSION" 2>/dev/null || echo "unknown")
+SOURCE_COMMIT_VALUE=$(git -C "$SOURCE_REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+safe_write_start "$TARGET_DIR/.pipeline-meta.json"
+cat > "$TARGET_DIR/.pipeline-meta.json" <<META_EOF
+{
+  "version": "$PIPELINE_VERSION_VALUE",
+  "source_commit": "$SOURCE_COMMIT_VALUE",
+  "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+META_EOF
+echo "yazıldı: .pipeline-meta.json (sürüm: $PIPELINE_VERSION_VALUE, commit: $SOURCE_COMMIT_VALUE)"
 
 echo ""
 echo "== Dosya kopyalama tamamlandı =="
