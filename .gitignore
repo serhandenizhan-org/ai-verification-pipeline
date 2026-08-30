@@ -28,3 +28,6 @@ playwright-report/
 .DS_Store
 .vscode/
 .idea/
+
+# Codex Desktop app'in yerel ortam yapılandırması (kişisel, kişi bazlı)
+.codex/
