@@ -294,7 +294,38 @@ etmez/durdurmaz — sadece Telegram'dan Şef'e bildirir, rotation her zaman
    asla doğrulanamaz. Bu, bir sonraki gerçek projede MUTLAKA ilk test
    edilmesi gereken şey.
 
-### 4.3 HENÜZ YAPILMADI
+### 4.3 TAMAMLANDI — üçüncü oturum bölümü (aynı gün, devamı)
+
+Şef, HANDOFF'ta "bilinen kısıt" olarak işaretlenmiş iki maddeyi doğrudan
+çözülmesini istedi (madde 4.3'te önceden "henüz çözülmedi" olarak
+işaretliydi):
+
+1. ✅ **Ledger'a `repo` kolonu eklendi — çoklu proje izolasyonu**.
+   `orchestrator/schema.sql` + `ledger.py` + `verifier.py` +
+   `alert_and_rotate.py` + `trufflehog_result.py` hepsi güncellendi.
+   `repo` artık zorunlu ("owner/repo" formatında), verilmezse fail-closed
+   hata fırlatıyor. CI'da `$GITHUB_REPOSITORY`'den otomatik geliyor (GitHub
+   Actions bunu zaten sağlıyor), workflow dosyalarında ekstra değişikliğe
+   gerek kalmadı. Test sırasında gerçek bir bug bulundu: index oluşturma
+   satırları `repo` kolonuna referans veriyordu ama migration (kolonu
+   ekleme) ondan SONRA çalışıyordu — sıra düzeltildi (önce tablo, sonra
+   migration, sonra index). İki farklı projede aynı PR numarasıyla (#7)
+   test edildi, karışmadı.
+2. ✅ **`ci.yml` artık tamamen otomatik üretiliyor**. Şef, önceki
+   "ci.yml.example'ı elle uyarla" adımını hiç anlamadığını, bunu tamamen
+   otomatikleştirmek istediğini söyledi. `scripts/generate_ci_workflow.py`
+   yazıldı: hedef projenin `package.json`/`requirements.txt`/`pyproject.toml`'una
+   bakıp Node/Python/monorepo tespiti yapıyor, yalnızca GERÇEKTEN var olan
+   `lint`/`typecheck`/`test`/`build` script'lerini kullanıyor (var olmayan
+   bir script'i çağırıp CI'ı anlamsız kırmıyor), Playwright varsa E2E job'ı
+   ekliyor. `install_pipeline.sh` artık `ci.yml.example` kopyalamıyor,
+   doğrudan bunu çağırıp gerçek `ci.yml`'i üretiyor. 4 senaryoda test
+   edildi (monorepo, Node-only, Python-only, boş proje) — hepsi geçerli
+   YAML ve doğru tespit üretti. `NEW_PROJECT_SETUP.md`'deki "madde 3"
+   tamamen yeniden yazıldı (artık "elle uyarla" değil "üretileni gözden
+   geçir").
+
+### 4.4 HENÜZ YAPILMADI
 
 1. Telegram bot'a komut dinleme (`getUpdates` polling) eklenmesi —
    `/durdur`, `/devam` gibi komutlar için. **Şef bu turda bunu ERTELEDİ**
