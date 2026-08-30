@@ -50,6 +50,18 @@ psql verification_pipeline -c "GRANT ALL ON SCHEMA public TO pipeline_app;"
 bash scripts/lock_ac.sh specs/features/<feature-adi>/acceptance_criteria.yaml
 ```
 
+## Pipeline'ın kendi testleri
+
+`orchestrator/`'daki mantık (risk sınıflandırma, verification-gate kararı,
+stale-commit koruması, circuit breaker) gerçek bir Postgres'e karşı test
+ediliyor — mock değil, çünkü asıl riskler (concurrency, stale veri)
+mock'lanmış bir DB ile yakalanamaz:
+
+```bash
+pip install -r orchestrator/requirements.txt -r orchestrator/requirements-dev.txt
+python3 -m pytest orchestrator/tests/ -v
+```
+
 ## Klasör Yapısı
 
 ```

@@ -1,0 +1,6 @@
+# Yalnızca geliştirme/test için — CI'ın normal job'ları (ledger yazma,
+# risk hesaplama vb.) bunu kurmuyor, gereksiz. Testleri çalıştırmak için:
+#   pip install -r orchestrator/requirements.txt -r orchestrator/requirements-dev.txt
+#   python3 -m pytest orchestrator/tests/
+-r requirements.txt
+pytest>=8.0,<9
