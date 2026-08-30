@@ -183,6 +183,19 @@ def cmd_gate(args: argparse.Namespace) -> int:
     if summary.get("secret_leak_blocking"):
         return _gate_result("FAIL", "Doğrulanmış secret sızıntısı — rotasyon onayı bekleniyor.")
 
+    # Codex review bulgusu (P1): TruffleHog hiçbir workflow'dan çağrılmıyordu,
+    # yani hiçbir zaman engelleyici olamıyordu. Artık gate BU EVENT'İN VAR
+    # OLMASINI ve "OK" olmasını ZORUNLU KILIYOR — TruffleHog adımı workflow'a
+    # eklenmezse (ya da hata verirse) gate FAIL verir, "sessizce atlanma"
+    # yapısal olarak imkansız hale gelir.
+    trufflehog_status = summary.get("trufflehog_status")
+    if trufflehog_status != "OK":
+        return _gate_result(
+            "FAIL",
+            f"Bu commit için TruffleHog sonucu 'OK' değil (durum: {trufflehog_status!r}) "
+            "— tarama hiç çalışmamış, hata vermiş ya da doğrulanmış secret bulmuş olabilir.",
+        )
+
     risk_level = summary.get("risk_level")
     if risk_level is None:
         return _gate_result(
