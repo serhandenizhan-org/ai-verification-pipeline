@@ -77,6 +77,12 @@ jobs:
     needs: risk-routing
     if: needs.risk-routing.outputs.risk_level != 'LOW'
     runs-on: [self-hosted, macOS, ARM64]
+    env:
+      # notifier.py bunları okuyor — BLOCKING bulgu/circuit breaker/ready-
+      # for-review bildirimleri bu ikisi olmadan sessizce (yalnızca stderr
+      # uyarısıyla) atlanır, pipeline'ı bloklamaz ama Şef habersiz kalır.
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
     steps:
       - uses: actions/checkout@v4
         with:
