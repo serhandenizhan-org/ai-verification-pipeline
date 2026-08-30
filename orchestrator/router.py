@@ -10,6 +10,19 @@ Fail-closed kural: risk hesaplanamazsa (path tanınamaz, git komutu
 başarısız olur, beklenmedik hata olur) varsayılan seviye CRITICAL'dir.
 LOW asla varsayılan değildir.
 
+ÖNEMLİ (Codex review bulgusu — P1): Eskiden tanınmayan bir dosya (hiçbir
+PATH_RULES deseniyle eşleşmeyen) sessizce 0 puan alıp LOW'a düşüyordu —
+`.github/workflows/ci.yml`, `scripts/verify_ac_lock.sh`,
+`src/middleware.ts` gibi kritik dosyalar bile. Artık yalnızca AÇIKÇA
+"düşük riskli" sayılan dosya kalıpları (dokümantasyon, lisans vb.) sıfır
+puan alıyor — geri kalan HER dosya en az NORMAL'e zorlayan bir taban puan
+alır. Ayrıca pipeline'ın KENDİSİNİ kontrol eden dosyalar (.github/workflows/,
+orchestrator/, scripts/, AC dosyaları) artık açıkça HIGH/CRITICAL puanlanıyor.
+
+Bağımlılık dosyası tespiti de artık yalnızca kök dizindeki tam yol eşitliğine
+değil, HERHANGİ bir alt dizindeki dosya adına bakıyor (monorepo'da
+`backend/requirements.txt` gibi yollar eskiden kaçırılıyordu).
+
 Kullanım:
     python3 router.py --base origin/main --head HEAD
     python3 router.py --files file1.py file2.py
@@ -19,6 +32,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -34,6 +49,12 @@ PATH_RULES: list[tuple[str, int]] = [
     ("migrations/", 35),
     ("database/", 30),
     ("security/", 30),
+    # Pipeline'ın KENDİSİNİ kontrol eden dosyalar — bunlar tanınmayan bir
+    # dosyadan daha da riskli, çünkü denetim mekanizmasının ta kendisi.
+    (".github/workflows/", 40),
+    ("orchestrator/", 50),
+    ("scripts/", 35),
+    ("acceptance_criteria.yaml", 30),
 ]
 
 # Puan eşikleri -> risk seviyesi
@@ -48,6 +69,25 @@ DEPENDENCY_FILES = {
     "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
     "requirements.txt", "pyproject.toml", "poetry.lock", "Pipfile.lock",
 }
+
+# Yalnızca bu kalıplarla eşleşen dosyalar "gerçekten düşük riskli" sayılır
+# ve taban puan (BASELINE_UNKNOWN_FILE_SCORE) almaz. Her şey burada
+# DEĞİLSE (tanınmayan bir dosya dahil) en az NORMAL'e zorlanır —
+# "LOW'u yalnızca açıkça izin verilen dosyalara ver" ilkesi (Codex review
+# bulgusu). Bilinçli olarak dar tutuldu: specs/dod.md gibi politika
+# dosyaları burada YOK çünkü onlar da önemli.
+LOW_RISK_ALLOWLIST_PATTERNS = [
+    re.compile(r"\.md$", re.IGNORECASE),
+    re.compile(r"^LICENSE(\.[a-z]+)?$", re.IGNORECASE),
+    re.compile(r"^\.gitignore$"),
+    re.compile(r"^\.editorconfig$"),
+    re.compile(r"^docs/"),
+]
+
+# Tanınmayan/allowlist dışı her dosya için taban puan — tek başına NORMAL
+# eşiğine (10) ulaştırır, birden fazla tanınmayan dosya birikirse HIGH'a
+# doğru iter (kasıtlı: "sessizce LOW'a düşme" riskini kapatmak için).
+BASELINE_UNKNOWN_FILE_SCORE = 10
 
 
 @dataclass
@@ -80,6 +120,10 @@ def get_diff_stats(base: str, head: str) -> int:
     return total
 
 
+def _is_low_risk_allowlisted(f: str) -> bool:
+    return any(p.search(f) for p in LOW_RISK_ALLOWLIST_PATTERNS)
+
+
 def score_files(files: list[str], total_changed_lines: int) -> RiskResult:
     """Dosya listesine ve değişen satır sayısına göre risk puanı hesaplar."""
     score = 0
@@ -87,16 +131,28 @@ def score_files(files: list[str], total_changed_lines: int) -> RiskResult:
 
     for f in files:
         f_lower = f.lower()
+        matched_specific_rule = False
+
         for pattern, points in PATH_RULES:
             if pattern in f_lower:
                 score += points
                 reasons.append(f"{f} -> +{points} ({pattern.rstrip('/')})")
+                matched_specific_rule = True
         if f_lower.startswith("api/") or "/api/" in f_lower:
             score += 25
             reasons.append(f"{f} -> +25 (API sözleşmesi)")
-        if f in DEPENDENCY_FILES:
+            matched_specific_rule = True
+        if os.path.basename(f) in DEPENDENCY_FILES:
             score += 20
             reasons.append(f"{f} -> +20 (dependency değişikliği)")
+            matched_specific_rule = True
+
+        if not matched_specific_rule and not _is_low_risk_allowlisted(f):
+            score += BASELINE_UNKNOWN_FILE_SCORE
+            reasons.append(
+                f"{f} -> +{BASELINE_UNKNOWN_FILE_SCORE} (tanınmayan dosya, "
+                "allowlist'te değil — fail-closed taban puan)"
+            )
 
     if total_changed_lines > 500:
         score += 10
@@ -192,7 +248,6 @@ def main() -> int:
             print(f"  - {r}")
 
     # GitHub Actions çıktısı (varsa) — $GITHUB_OUTPUT dosyasına yazılır
-    import os
     gh_output = os.environ.get("GITHUB_OUTPUT")
     if gh_output:
         with open(gh_output, "a", encoding="utf-8") as f:
