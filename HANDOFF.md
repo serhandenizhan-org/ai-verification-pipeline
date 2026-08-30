@@ -325,7 +325,62 @@ işaretliydi):
    tamamen yeniden yazıldı (artık "elle uyarla" değil "üretileni gözden
    geçir").
 
-### 4.4 HENÜZ YAPILMADI
+### 4.4 TAMAMLANDI — Codex'in dış review'ı sonrası kritik düzeltmeler
+
+Şef, bu pipeline'ı Codex'e (ayrı bir ChatGPT sohbetinde) derin incelettirdi.
+Codex 10 P1 (BLOCKING) + 4 P2 (ADVISORY) bulgu buldu — genel tespiti:
+**"denetleyen bileşenler var ama sonuçları bağlayıcı bir merge kararına
+dönüştüren mekanizma yok."** Şef, en kritik 3 maddeyi seçip düzeltilmesini
+istedi (kalan 7 P1 + 4 P2 bulgu HENÜZ YAPILMADI, aşağıda madde 4.4'te).
+
+1. ✅ **Tek bağlayıcı `verification-gate`**. Doğrulandı: `cmd_record_codex`
+   BLOCKING bulgu olsa bile her zaman `0` dönüyordu VE branch protection
+   yalnızca `Secret Scan (gitleaks)`'ı zorunlu tutuyordu — yani Codex
+   "BLOCKING" dese bile merge butonu aktif kalıyordu. `verifier.py gate`
+   komutu eklendi: `ledger.summarize_for_gate()` + circuit breaker
+   durumuna bakıp TEK bir PASS/FAIL kararı üretiyor, `verification.yml`'in
+   yeni `verification-gate` job'ı bunu PR'ın GERÇEK head_sha'sına (workflow_run
+   olayının varsayılan SHA'sı base branch'e ait olduğu için `github.event.workflow_run.head_sha`
+   açıkça kullanıldı — bu da bir Codex bulgusuydu) bir commit status olarak
+   yazıyor. `install_pipeline.sh` artık branch protection'da hem
+   `Secret Scan (gitleaks)` hem `verification-gate`'i zorunlu tutuyor.
+   6 senaryo test edildi (LOW/HIGH risk, blocking var/yok, breaker tripped,
+   secret leak blocking, VE en kritik olanı: **eski bir commit'in PASS
+   sonucu yeni commit'in gate kararını etkilemiyor**).
+   Ayrıca gerçek bir `bash -e` bug'ı bulunup düzeltildi: `X=$(grep -c ...)`
+   grep eşleşme bulamayınca (exit 1) GitHub Actions'ın varsayılan shell'i
+   altında satırı anında öldürüyordu, `${X:-0}` fallback'ine hiç
+   ulaşılmıyordu — `bash -e` ile yerel olarak test edilip doğrulandı.
+2. ✅ **Gerçek izolasyon** — `pin_trusted_files.sh`'in eski yaklaşımı
+   (orchestrator/*.py'yi PR checkout'u İÇİNDE ezmek) yetersizdi: Python,
+   çalıştırılan script'in kendi dizinini sys.path'in başına koyduğundan,
+   PR yeni bir sibling modül (ör. `orchestrator/argparse.py`) ekleyip
+   ezilmiş dosyaların import'larını gölgeleyebilirdi. Bu GERÇEK bir
+   saldırıyla yerel olarak simüle edildi ve doğrulandı: aynı dizinden
+   çalıştırıldığında zararlı kod çalıştı, izole `$RUNNER_TEMP` dizininden
+   çalıştırıldığında (PR'ın kendi checkout'unda aynı zararlı dosya dursa
+   bile) hiç etkilenmedi. `scripts/stage_trusted_orchestrator.sh` artık
+   güvenilir kodu PR ağacının tamamen dışına kopyalıyor, Python HER ZAMAN
+   oradan çalıştırılıyor. `pin_trusted_files.sh` yalnızca AGENTS.md/
+   severity_rules.md'ye daraltıldı (Codex'in okuduğu, çalıştırmadığı
+   dosyalar — prompt injection riski farklı, in-place ezme yeterli).
+3. ✅ **Ledger commit kimliği + Postgres circuit breaker**. `ledger_entries`'e
+   `head_sha` + `run_id` eklendi. `summarize_for_gate(repo, pr, head_sha)`
+   yalnızca belirli bir commit'e ait olayları döndürüyor — eski (geç
+   biten) bir çalışmanın PASS sonucu artık yeni bir commit için
+   kullanılamıyor (test edildi: eski commit codex=PASS, yeni commit'in
+   gate-summary'si codex=null döndü). `circuit_breaker.py` JSON dosyasından
+   (PR checkout dizininde duruyordu, checkout temizliğinde silinebilirdi,
+   kilitsiz yazım) Postgres'e taşındı, `SELECT ... FOR UPDATE` ile atomik
+   güncelleme — 20 eşzamanlı `record_attempt()` çağrısıyla test edildi,
+   sıfır kayıp güncelleme.
+
+**NOT**: Bu repo (`ai-verification-pipeline`) kendisi gerçek bir proje
+olmadığı için (Fast CI hep fail veriyor, gerçek kod yok) kendi branch
+protection'ına `verification-gate`'i zorunlu YAPMADIK — bu yalnızca
+`install_pipeline.sh` ile kurulan GERÇEK hedef projelere uygulanıyor.
+
+### 4.5 HENÜZ YAPILMADI
 
 1. Telegram bot'a komut dinleme (`getUpdates` polling) eklenmesi —
    `/durdur`, `/devam` gibi komutlar için. **Şef bu turda bunu ERTELEDİ**
@@ -339,13 +394,61 @@ işaretliydi):
    HÂLÂ Şef'in elle başlattığı sohbetler üzerinden çalışıyor. Bu, tam otonom
    "PR açıldı → Mac mini otomatik algıladı → hiç insan müdahalesi olmadan"
    döngüsünün eksik kalan son parçası.
-4. `ci.yml` hâlâ Node-only şablon (`ci.yml.example` olarak `install_pipeline.sh`
-   ile kopyalanıyor) — gerçek bir proje eklenince stack'e göre elle
-   uyarlanması gerekiyor, otomatik stack detection yok.
+4. ~~`ci.yml` hâlâ Node-only şablon~~ — ÇÖZÜLDÜ, bkz. madde 4.3
+   (`scripts/generate_ci_workflow.py`).
 5. Circuit breaker, CI (Fast CI) taraflı hatalar için HİÇ tetiklenmiyor —
    yalnızca `record-codex`/`record-ci` CLI komutları çağrıldığında devreye
    giriyor, ama `ci.yml` şu an `verifier.py record-ci`'yi hiç çağırmıyor.
    Yalnızca Codex tarafı (risk-routing → codex-review) tam bağlı.
+   (Not: bu artık `verification-gate`'in "risk hesaplanmamışsa FAIL"
+   mantığıyla DOLAYLI olarak kapanıyor — Fast CI fail olursa risk hiç
+   hesaplanmaz, gate zaten FAIL verir. Ama circuit breaker'ın kendisi
+   CI-taraflı tekrarlı hataları hâlâ saymıyor, yalnızca Codex-taraflı.)
+
+### 4.6 Codex'in dış review'ından KALAN bulgular (Şef bu turda seçmedi)
+
+Madde 4.4'te yalnızca en kritik 3 madde düzeltildi. Codex'in bulduğu
+kalan 7 P1 (BLOCKING) + 4 P2 (ADVISORY) bulgu HENÜZ ELE ALINMADI:
+
+**Kalan P1'ler:**
+1. AC kilidi yeniden hash üreterek veya `status`'u `draft`'a çevirerek
+   aşılabiliyor — güvenilir eski AC ile karşılaştırma yok
+   (`verify_ac_lock.sh`).
+2. Tanınmayan/bazı kritik dosyalar (`.github/workflows/*`, `src/middleware.ts`
+   gibi) yanlışlıkla LOW sınıflandırılabiliyor; bağımlılık kontrolü tam yol
+   eşitliği kullanıyor, alt dizin manifestlerini kaçırıyor (`router.py`).
+3. TruffleHog workflow'a HİÇ bağlı değil (`verification.yml`'de çağrısı
+   yok); `trufflehog_result.py` eksik/bozuk raporu "bulgu yok" sayıyor.
+4. Stripe key kontrolü allowlist değil (yalnızca `sk_live_` reddediliyor,
+   `sk_test_` dışındaki her şey uyarıyla kabul ediliyor); ayrıca E2E
+   container'ına key, guard çalışmadan ÖNCE veriliyor
+   (`check_stripe_key_mode.sh`, `ci.yml`).
+5. `check_new_dependencies.py`'nin regex'i PEP 621 formatlı satırları
+   kaçırıyor, npm script anahtarlarını paket sanıyor; `git diff` hatasını
+   "yeni paket yok" sayıyor.
+6. `install_pipeline.sh` mevcut proje ayarlarını (CLAUDE.md, `.claude/settings.json`,
+   AGENTS.md, pre-commit hook) YEDEKSİZ eziyor — ikinci kez çalıştırmak
+   veri kaybına yol açabilir.
+7. ~~Ledger repo/commit ayrımı yapmıyor~~ — repo KISMEN çözüldü (madde 4.2),
+   commit/run kimliği TAMAMEN çözüldü (madde 4.4) — bu madde artık kapalı
+   sayılabilir.
+
+**P2'ler (ADVISORY):**
+- Kurulum belgeleriyle environment kullanımı uyuşmuyor (`.env` anlatılıyor
+  ama CI GitHub Secrets kullanıyor, ayrım net değil).
+- DoD'nin önemli maddeleri (coverage eşiği, AC-test eşlemesi) otomatik
+  doğrulanmıyor; pipeline'ın kendi Python/shell kodu için test takımı yok.
+- Telegram/PR durumu güvenilir uzlaştırılmıyor (Markdown kaçışsız,
+  retry/outbox yok, eski etiketler temizlenmiyor).
+- Kurulum başarısızlığı `|| true` ile yutulup yine de "tamamlandı"
+  yazılıyor; `branch-protection.md`'deki manuel talimat artık solo kararla
+  çelişiyor (madde 4.1.11).
+
+Codex'in önerdiği yeni özellikler (henüz değerlendirilmedi): PR doğrulama
+özeti (tek güncellenen yorum), AC-test izlenebilirliği, sürümlü merkezi
+pipeline paketi, stack profilleri + kurulum doğrulayıcısı, bulgulara
+kalıcı kimlik + triage geçmişi, maliyet/kullanım görünürlüğü, yetkili
+durdur/devam + süreli istisna, izole preview + keşifsel QA.
 
 ## 5. Önemli dosyalar / nereye bakılır
 
