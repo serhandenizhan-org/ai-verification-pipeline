@@ -1,6 +1,12 @@
 # VERIFICATION — Fast CI PASS olduktan SONRA çalışır.
 # Risk seviyesini hesaplar, seviyeye göre Reviewer Codex'i tetikler,
-# sonuçları Verification Ledger'a yazar ve gerekirse Şef'e bildirim gönderir.
+# sonuçları Verification Ledger'a yazar, gerekirse Şef'e bildirim gönderir
+# ve EN SONUNDA tek bir bağlayıcı "verification-gate" commit status'u
+# üretir (bkz. Codex review bulgusu — P1: "hiçbir sonuç merge'ü gerçekten
+# engellemiyordu"). GitHub branch protection'da ZORUNLU status check
+# olarak yalnızca "verification-gate" belirtilmelidir — Fast CI'ın kendi
+# job'larının hepsi buna zaten dolaylı olarak dahildir (risk hesaplanmamışsa
+# gate FAIL verir, bkz. verifier.py cmd_gate).
 #
 # Codex entegrasyonu: `codex` CLI (Codex CLI, ChatGPT hesabıyla login,
 # bkz. HANDOFF.md 4.8) self-hosted runner'da zaten authenticated. Kör
@@ -19,6 +25,7 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  statuses: write
 
 jobs:
   risk-routing:
@@ -27,7 +34,6 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     outputs:
       risk_level: ${{ steps.risk.outputs.risk_level }}
-      required_checks: ${{ steps.risk.outputs.required_checks }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,16 +43,20 @@ jobs:
           # bulgusu). head_sha immutable ve her durumda çözülebilir.
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      - name: Orchestrator/agent kontrol dosyalarını main'den sabitle (PR bunları değiştiremesin)
-        # Codex review bulgusu: bu job PR'ın kendi orchestrator/*.py ve
-        # requirements.txt'sini çalıştırıyor — kötü niyetli bir PR bunları
-        # değiştirip runner'ın GITHUB_TOKEN/Postgres erişimini kötüye
-        # kullanabilir. Bu dosyalar HER ZAMAN origin/main'den ezilir.
-        #
-        # ÖNEMLİ: script'in KENDİSİ de PR checkout'undan çalıştırılırsa
-        # kötü niyetli bir PR onu no-op'a çevirebilir — bu yüzden script'i
-        # PR kopyasından değil, doğrudan origin/main'den çekip çalıştırıyoruz.
-        run: git show origin/main:scripts/pin_trusted_files.sh | bash
+      - name: Güvenilir orchestrator kodunu PR checkout'unun DIŞINA stage'le
+        # Codex review bulgusu (P1): dosyaları PR checkout'u İÇİNDE
+        # ezmek (eski pin_trusted_files.sh davranışı) yeterli değildi —
+        # Python, çalıştırılan script'in kendi dizinini sys.path'in başına
+        # koyar, yani PR yeni bir sibling modül ekleyerek (ör.
+        # orchestrator/argparse.py) ezilmiş dosyaların import'larını bile
+        # gölgeleyebilirdi (GERÇEK bir saldırıyla test edilip doğrulandı).
+        # Artık güvenilir kod PR ağacının TAMAMEN DIŞINDA ($RUNNER_TEMP)
+        # çalışıyor. Script'in KENDİSİ de PR'dan değil origin/main'den
+        # çekiliyor (yoksa PR onu no-op'a çevirebilir).
+        id: stage
+        run: |
+          TRUSTED_DIR=$(git show origin/main:scripts/stage_trusted_orchestrator.sh | bash -s -- "$RUNNER_TEMP/trusted-orchestrator")
+          echo "dir=$TRUSTED_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Python kur
         uses: actions/setup-python@v5
@@ -54,23 +64,23 @@ jobs:
           python-version: "3.12"
 
       - name: Orchestrator bağımlılıklarını kur (psycopg — Postgres ledger için)
-        run: pip install -r orchestrator/requirements.txt
+        run: pip install -r "${{ steps.stage.outputs.dir }}/orchestrator/requirements.txt"
 
-      - name: Risk seviyesini hesapla
+      - name: Risk seviyesini hesapla + ledger'a yaz
         id: risk
-        working-directory: orchestrator
-        run: |
-          python3 router.py --base origin/main --head HEAD
-
-      - name: Ledger'a risk kaydını yaz
-        working-directory: orchestrator
         env:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          python3 verifier.py compute-risk \
+          python3 "${{ steps.stage.outputs.dir }}/orchestrator/router.py" --base origin/main --head HEAD
+          python3 "${{ steps.stage.outputs.dir }}/orchestrator/verifier.py" compute-risk \
             --pr "$PR_NUMBER" \
             --base origin/main \
-            --head HEAD
+            --head HEAD \
+            --head-sha "$HEAD_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            | tee risk.json
+          echo "risk_level=$(python3 -c 'import json; print(json.load(open("risk.json"))["risk_level"])')" >> "$GITHUB_OUTPUT"
 
   codex-review:
     name: Reviewer Codex (deep review)
@@ -87,16 +97,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # head_branch YETERSİZ: fork PR'larda bu branch base repo'da
-          # bulunmuyor, checkout sessizce/açıkça fail eder (Codex review
-          # bulgusu). head_sha immutable ve her durumda çözülebilir.
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      - name: Orchestrator/agent kontrol dosyalarını main'den sabitle (PR bunları değiştiremesin)
-        # Aynı gerekçe: bu job hem orchestrator/verifier.py'ı hem de
-        # AGENTS.md'yi (codex exec review'ın authenticated okuduğu dosya)
-        # çalıştırıyor — ikisi de PR ne yazarsa yazsın main'den gelmeli.
+      - name: Codex'in okuyacağı davranış dosyalarını main'den sabitle
+        # AGENTS.md / severity_rules.md — Codex bunları authenticated
+        # olarak OKUYOR (çalıştırmıyor), risk prompt injection. In-place
+        # ezme burada yeterli (çalıştırılan Python kodu için değil).
         run: git show origin/main:scripts/pin_trusted_files.sh | bash
+
+      - name: Güvenilir orchestrator kodunu PR checkout'unun DIŞINA stage'le
+        id: stage
+        run: |
+          TRUSTED_DIR=$(git show origin/main:scripts/stage_trusted_orchestrator.sh | bash -s -- "$RUNNER_TEMP/trusted-orchestrator")
+          echo "dir=$TRUSTED_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Python kur
         uses: actions/setup-python@v5
@@ -104,12 +117,12 @@ jobs:
           python-version: "3.12"
 
       - name: Orchestrator bağımlılıklarını kur (psycopg — Postgres ledger için)
-        run: pip install -r orchestrator/requirements.txt
+        run: pip install -r "${{ steps.stage.outputs.dir }}/orchestrator/requirements.txt"
 
       - name: Yeni bağımlılıkları tespit et (tedarik zinciri metadata'sı)
         id: deps
         run: |
-          python3 scripts/check_new_dependencies.py --base origin/main --head HEAD > new_deps_report.json
+          python3 "${{ steps.stage.outputs.dir }}/scripts/check_new_dependencies.py" --base origin/main --head HEAD > new_deps_report.json
           echo "found=$(python3 -c 'import json; print(json.load(open("new_deps_report.json"))["new_dependencies_found"])')" >> "$GITHUB_OUTPUT"
 
       - name: needs-codex-review etiketini ekle
@@ -121,19 +134,14 @@ jobs:
       - name: "@codex review yorumu at (ChatGPT/Codex mobil app'te PR takibi için)"
         # Doğrulandı: bu yorumu atmak, PR'ın hesap seviyesinde bağlı
         # ChatGPT/Codex Desktop + mobil app'in "Pull request'ler" sekmesinde
-        # görünmesini sağlıyor (checks, yorumlar, aktivite akışıyla birlikte)
-        # — ayrı bir "repo bağlama"/GitHub App kurulumu GEREKMİYOR, hesap
-        # zaten bunu otomatik yakalıyor. Asıl gating kararımızı vermiyor
-        # (onu aşağıdaki CLI review + ledger yapıyor), yalnızca görünürlük içindir.
+        # görünmesini sağlıyor. Asıl gating kararımızı vermiyor — onu
+        # aşağıdaki CLI review + verification-gate job'ı yapıyor.
         env:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh pr comment "$PR_NUMBER" --body "@codex review"
 
       - name: Codex review çalıştır (kör — Orchestrator'ın adversarial notlarını görmez)
-        # Talimatlar --base ile birlikte custom PROMPT verilemediği için
-        # (codex CLI kısıtı) repo kökündeki AGENTS.md'den otomatik okunuyor
-        # (severity_rules.md formatı, kör review ilkesi, tedarik zinciri).
         id: codex
         run: |
           set +e
@@ -144,18 +152,21 @@ jobs:
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
 
       - name: Bulgu sayılarını çıkar
-        # codex exec review kendi P1/P2/P3 öncelik şablonunu kullanıyor
-        # (AGENTS.md'deki literal [BLOCKING]/[ADVISORY] formatı denendi,
-        # review modu bunu yok sayıyor — bkz. AGENTS.md "Çıktı formatı").
+        # codex exec review kendi P1/P2/P3 öncelik şablonunu kullanıyor.
         # P1 -> BLOCKING, P2/P3 -> ADVISORY eşlemesi kullanılıyor.
-        # NOT: grep -c eşleşme yoksa "0" YAZAR ama exit code 1 döner —
-        # `|| echo 0` kullanmak "0\n0" gibi çift satır üretip $GITHUB_OUTPUT'u
-        # bozar (bu da bir Codex review bulgusuydu). Bunun yerine değişkeni
-        # boşsa 0'a düşürüyoruz.
+        #
+        # KRİTİK NOT (Codex review bulgusu — P1): GitHub Actions'ın
+        # varsayılan shell'i `bash -e`dir. `X=$(grep -c ... 2>/dev/null)`
+        # grep eşleşme bulamayınca (exit 1) satırın KENDİSİ script'i
+        # ANINDA sonlandırıyordu — `${X:-0}` satırına HİÇ ulaşılmıyordu.
+        # Bu, 0 bulgulu ya da tek kategorili (yalnız ADVISORY) her temiz
+        # raporda adımı sessizce kesiyordu. `|| true` ile grep'in kendi
+        # exit kodunu her zaman 0'a sabitliyoruz, `${VAR:-0}` da boş/eksik
+        # durumu 0'a çeviriyor (çift-sıfır bug'ından farklı — bkz. eski not).
         id: findings
         run: |
-          BLOCKING=$(grep -c '^- \[P1\]' codex_last_message.txt 2>/dev/null); BLOCKING=${BLOCKING:-0}
-          ADVISORY=$(grep -cE '^- \[(P2|P3)\]' codex_last_message.txt 2>/dev/null); ADVISORY=${ADVISORY:-0}
+          BLOCKING=$(grep -c '^- \[P1\]' codex_last_message.txt 2>/dev/null || true); BLOCKING=${BLOCKING:-0}
+          ADVISORY=$(grep -cE '^- \[(P2|P3)\]' codex_last_message.txt 2>/dev/null || true); ADVISORY=${ADVISORY:-0}
           echo "blocking=$BLOCKING" >> "$GITHUB_OUTPUT"
           echo "advisory=$ADVISORY" >> "$GITHUB_OUTPUT"
 
@@ -191,18 +202,26 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           PR_URL: ${{ github.event.workflow_run.pull_requests[0].html_url }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           CODEX_STATUS="PASS"
           if [[ "${{ steps.codex.outputs.exit_code }}" != "0" ]]; then
             CODEX_STATUS="FAIL"
           fi
-          python3 orchestrator/verifier.py record-codex \
+          python3 "${{ steps.stage.outputs.dir }}/orchestrator/verifier.py" record-codex \
             --pr "$PR_NUMBER" \
             --status "$CODEX_STATUS" \
             --findings-json "{\"blocking\": ${{ steps.findings.outputs.blocking }}, \"advisory\": ${{ steps.findings.outputs.advisory }}}" \
             --report-url "$PR_URL" \
             --pr-url "$PR_URL" \
-            --failure-text "codex exec review exit_code=${{ steps.codex.outputs.exit_code }}"
+            --head-sha "$HEAD_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --failure-text "codex exec review exit_code=${{ steps.codex.outputs.exit_code }}" || true
+          # NOT: record-codex artık BLOCKING varsa 1 dönüyor (defense in
+          # depth) — ama bu adımın kendisi FAIL olursa sonraki job'lar
+          # (verification-gate dahil) yine de çalışmalı, o yüzden `|| true`.
+          # Asıl karar merci ledger + verification-gate'tir, bu adımın
+          # exit code'u değil.
 
   low-risk-fast-path:
     name: Low Risk — Doğrudan Şef Onayına Geç
@@ -218,3 +237,76 @@ jobs:
         run: |
           gh pr edit "$PR_NUMBER" --add-label "ready-for-human-approval"
           gh pr comment "$PR_NUMBER" --body "Risk seviyesi LOW — Codex review atlandı, doğrudan Şef onayı bekleniyor."
+
+  verification-gate:
+    name: Verification Gate
+    # Codex review bulgusu (P1): önceden hiçbir job TÜM sonuçları TEK bir
+    # bağlayıcı karara dönüştürmüyordu — Fast CI, risk-routing, codex-review
+    # ayrı ayrı çalışıp PR'a yorum/etiket bırakıyordu ama GitHub'ın
+    # required status check listesinde yalnızca "Secret Scan (gitleaks)"
+    # vardı. Yani Codex BLOCKING dese bile merge butonu aktif kalıyordu.
+    #
+    # Bu job HER ZAMAN çalışır (if: always()) — önceki job'lardan biri
+    # skip/fail olsa bile gate bir karar üretip commit status'unu yazmalı
+    # (aksi halde required check hiç oluşmaz, PR sonsuza kadar "pending"
+    # kalır — bu da fail-closed'dır ama nedeni belirsiz olur, bu yüzden
+    # açıkça FAIL yazıp nedeni belirtmek daha iyi).
+    needs: [risk-routing, codex-review, low-risk-fast-path]
+    if: always()
+    runs-on: [self-hosted, macOS, ARM64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Güvenilir orchestrator kodunu stage'le
+        id: stage
+        run: |
+          TRUSTED_DIR=$(git show origin/main:scripts/stage_trusted_orchestrator.sh | bash -s -- "$RUNNER_TEMP/trusted-orchestrator")
+          echo "dir=$TRUSTED_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Python kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Orchestrator bağımlılıklarını kur
+        run: pip install -r "${{ steps.stage.outputs.dir }}/orchestrator/requirements.txt"
+
+      - name: Bağlayıcı kararı üret ve GitHub commit status olarak yaz
+        env:
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          PR_URL: ${{ github.event.workflow_run.pull_requests[0].html_url }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          GATE_OUTPUT=$(python3 "${{ steps.stage.outputs.dir }}/orchestrator/verifier.py" gate \
+            --pr "$PR_NUMBER" \
+            --head-sha "$HEAD_SHA")
+          GATE_EXIT=$?
+          set -e
+
+          echo "Gate çıktısı: $GATE_OUTPUT"
+          DECISION=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['decision'])" "$GATE_OUTPUT" 2>/dev/null || echo "FAIL")
+          REASON=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['reason'])" "$GATE_OUTPUT" 2>/dev/null || echo "gate script çalışırken hata oluştu (exit=$GATE_EXIT) — fail-closed")
+
+          if [[ "$DECISION" == "PASS" ]]; then
+            STATE="success"
+          else
+            STATE="failure"
+          fi
+
+          # ÖNEMLİ (Codex review bulgusu): workflow_run olayının kendi
+          # varsayılan SHA'sı base branch'e aittir — status'u AÇIKÇA
+          # PR'ın gerçek head_sha'sına yazmak gerekir, yoksa GitHub bunu
+          # PR'ın "Checks" sekmesiyle hiç ilişkilendirmez.
+          gh api "repos/${{ github.repository }}/statuses/$HEAD_SHA" \
+            -f state="$STATE" \
+            -f context="verification-gate" \
+            -f description="$REASON" \
+            -f target_url="$PR_URL"
+
+          echo "Karar: $DECISION — $REASON"
+          [[ "$DECISION" == "PASS" ]]
