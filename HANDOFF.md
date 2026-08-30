@@ -405,50 +405,73 @@ protection'ına `verification-gate`'i zorunlu YAPMADIK — bu yalnızca
    hesaplanmaz, gate zaten FAIL verir. Ama circuit breaker'ın kendisi
    CI-taraflı tekrarlı hataları hâlâ saymıyor, yalnızca Codex-taraflı.)
 
-### 4.6 Codex'in dış review'ından KALAN bulgular (Şef bu turda seçmedi)
+### 4.6 TAMAMLANDI — Codex'in dış review'ından KALAN 7 P1 + 4 P2
 
-Madde 4.4'te yalnızca en kritik 3 madde düzeltildi. Codex'in bulduğu
-kalan 7 P1 (BLOCKING) + 4 P2 (ADVISORY) bulgu HENÜZ ELE ALINMADI:
+Şef "kalan bulguları da sırayla düzeltelim" dedi — hepsi bu oturumda
+gerçek testlerle (çoğu gerçek saldırı/bypass simülasyonuyla) tamamlandı.
 
-**Kalan P1'ler:**
-1. AC kilidi yeniden hash üreterek veya `status`'u `draft`'a çevirerek
-   aşılabiliyor — güvenilir eski AC ile karşılaştırma yok
-   (`verify_ac_lock.sh`).
-2. Tanınmayan/bazı kritik dosyalar (`.github/workflows/*`, `src/middleware.ts`
-   gibi) yanlışlıkla LOW sınıflandırılabiliyor; bağımlılık kontrolü tam yol
-   eşitliği kullanıyor, alt dizin manifestlerini kaçırıyor (`router.py`).
-3. TruffleHog workflow'a HİÇ bağlı değil (`verification.yml`'de çağrısı
-   yok); `trufflehog_result.py` eksik/bozuk raporu "bulgu yok" sayıyor.
-4. Stripe key kontrolü allowlist değil (yalnızca `sk_live_` reddediliyor,
-   `sk_test_` dışındaki her şey uyarıyla kabul ediliyor); ayrıca E2E
-   container'ına key, guard çalışmadan ÖNCE veriliyor
-   (`check_stripe_key_mode.sh`, `ci.yml`).
-5. `check_new_dependencies.py`'nin regex'i PEP 621 formatlı satırları
-   kaçırıyor, npm script anahtarlarını paket sanıyor; `git diff` hatasını
-   "yeni paket yok" sayıyor.
-6. `install_pipeline.sh` mevcut proje ayarlarını (CLAUDE.md, `.claude/settings.json`,
-   AGENTS.md, pre-commit hook) YEDEKSİZ eziyor — ikinci kez çalıştırmak
-   veri kaybına yol açabilir.
-7. ~~Ledger repo/commit ayrımı yapmıyor~~ — repo KISMEN çözüldü (madde 4.2),
-   commit/run kimliği TAMAMEN çözüldü (madde 4.4) — bu madde artık kapalı
-   sayılabilir.
+**P1'ler (hepsi BLOCKING, hepsi düzeltildi):**
+1. ✅ **AC kilidi bypass'ı** — `orchestrator/ac_lock.py` yazıldı: kilit
+   hash'i artık dosyanın İÇİNDE değil Postgres'te (bağımsız, yalnızca
+   `lock_ac.sh`'in yazabildiği bir kayıt). 3 gerçek bypass senaryosu
+   (hash+içerik birlikte değiştirme, `status`'u `draft`'a çevirme, dosyayı
+   silme) test edildi, üçü de engellendi.
+2. ✅ **Router risk sınıflandırması** — allowlist mantığına çevrildi:
+   yalnızca açıkça izin verilen dosyalar (docs, LICENSE) LOW alıyor, geri
+   kalan HER ŞEY en az NORMAL. Pipeline'ın kendi kontrol yüzeyine
+   (`.github/workflows/`, `orchestrator/`, `scripts/`) özel HIGH/CRITICAL
+   kuralları eklendi. Bağımlılık dosyası tespiti artık alt dizinleri de
+   yakalıyor (`os.path.basename`).
+3. ✅ **TruffleHog wiring** — gerçekten `ci.yml`'e eklendi, sonuç
+   `trufflehog_result.py` ile işleniyor (ERROR/OK ayrımı net). `verifier.py
+   gate`, bu event'in `OK` olmasını ZORUNLU KILIYOR — TruffleHog
+   çalışmazsa/hata verirse gate FAIL verir, "sessizce atlama" artık
+   yapısal olarak imkansız.
+4. ✅ **Stripe key guard** — allowlist'e çevrildi (`sk_test_` DIŞINDAKİ
+   her şey reddediliyor), ve E2E job şablonu artık guard'ı HOST'ta,
+   secret container'a hiç verilmeden önce çalıştırıyor.
+5. ✅ **Dependency detection** — regex tabanlı diff-satırı parse'ı yerine
+   gerçek manifest parse'ı (`json`, `tomllib`) geldi — PEP 621, npm script
+   anahtarı karışıklığı, ve git hatasının "temiz" sayılması hepsi düzeldi.
+6. ✅ **install_pipeline.sh yedekleme** — var olan her dosya ezilmeden
+   önce `.pipeline-install-backup-<zaman>/` altına yedekleniyor, script
+   sonunda özetleniyor. Gerçek özelleştirilmiş içerikle test edildi.
+7. ✅ Ledger repo/commit ayrımı zaten madde 4.2/4.4'te çözülmüştü.
 
-**P2'ler (ADVISORY):**
-- Kurulum belgeleriyle environment kullanımı uyuşmuyor (`.env` anlatılıyor
-  ama CI GitHub Secrets kullanıyor, ayrım net değil).
-- DoD'nin önemli maddeleri (coverage eşiği, AC-test eşlemesi) otomatik
-  doğrulanmıyor; pipeline'ın kendi Python/shell kodu için test takımı yok.
-- Telegram/PR durumu güvenilir uzlaştırılmıyor (Markdown kaçışsız,
-  retry/outbox yok, eski etiketler temizlenmiyor).
-- Kurulum başarısızlığı `|| true` ile yutulup yine de "tamamlandı"
-  yazılıyor; `branch-protection.md`'deki manuel talimat artık solo kararla
-  çelişiyor (madde 4.1.11).
+**P2'ler (hepsi ADVISORY, hepsi düzeltildi):**
+- ✅ `.env.example`/`NEW_PROJECT_SETUP.md`: yerel/.env vs CI/GitHub
+  Secrets vs MAX_ITERATIONS'ın CI'ı hiç etkilememesi artık açıkça
+  belgelendi (üç ayrı katman, üç ayrı mekanizma).
+- ✅ **Pipeline'ın kendi test takımı** — `orchestrator/tests/` eklendi,
+  bu oturumda elle doğrulanan senaryolar (stale-commit koruması, breaker
+  tripping, risk sınıflandırma) artık 16 gerçek pytest testi (gerçek
+  Postgres'e karşı, mock değil) — hepsi geçiyor.
+- ✅ Telegram: dinamik metin artık Markdown-kaçışlı, 3 denemeli retry
+  eklendi (gerçek testle doğrulandı, ~6sn backoff). PR etiketleri
+  (`needs-codex-review`/`ready-for-human-approval`) artık gate'in GERÇEK
+  kararını yansıtıyor, önceden sadece LOW-risk yolunda ekleniyordu.
+- ✅ Kurulum hataları artık `|| true` ile yutulmuyor — gerçek bir
+  auth/API hatası "KISMEN BAŞARISIZ" olarak açıkça raporlanıyor.
+  `branch-protection.md` solo-geliştirme kararıyla artık ÇELİŞMİYOR
+  (eskiden "1 onay zorunlu" yazıyordu, bu solo projede PR'ları kalıcı
+  kilitlerdi).
 
-Codex'in önerdiği yeni özellikler (henüz değerlendirilmedi): PR doğrulama
-özeti (tek güncellenen yorum), AC-test izlenebilirliği, sürümlü merkezi
-pipeline paketi, stack profilleri + kurulum doğrulayıcısı, bulgulara
-kalıcı kimlik + triage geçmişi, maliyet/kullanım görünürlüğü, yetkili
-durdur/devam + süreli istisna, izole preview + keşifsel QA.
+**Bilinçli olarak ele alınmayan (Codex'in önerdiği yeni özellikler)**:
+PR doğrulama özeti (tek güncellenen yorum), AC-test izlenebilirliği,
+sürümlü merkezi pipeline paketi, stack profilleri + kurulum doğrulayıcısı,
+bulgulara kalıcı kimlik + triage geçmişi, maliyet/kullanım görünürlüğü,
+yetkili durdur/devam + süreli istisna, izole preview + keşifsel QA — bunlar
+YENİ ÖZELLİK önerileri, bug fix değil, Şef henüz bunları istemedi.
+
+**DİKKAT — bu oturumda tekrarlanan bir ders**: `install_pipeline.sh`'i
+gerçek `serhandenizhan-org/ai-verification-pipeline` reposuna karşı test
+ederken (owner/repo argümanıyla), bu reponun KENDİ branch protection'ını
+da gerçekten değiştirdi (`verification-gate`'i zorunlu status check
+yaptı) — bu repo gerçek bir proje olmadığı için `verification-gate` asla
+postlanmaz, PR'lar kalıcı "pending" kalırdı. Fark edilip hemen geri
+alındı. **install_pipeline.sh'in owner/repo argümanını test ederken
+GERÇEK org repo'suna karşı değil, ayrı bir scratch/test repo'suna karşı
+çalıştırılmalı.**
 
 ## 5. Önemli dosyalar / nereye bakılır
 
