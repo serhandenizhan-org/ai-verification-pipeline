@@ -235,10 +235,30 @@ if [[ -n "$GITHUB_REPO" ]]; then
     echo "       bash scripts/setup_github.sh $GITHUB_REPO" >&2
   else
     echo "== GitHub kurulumu: $GITHUB_REPO =="
-    gh label create "needs-codex-review" --repo "$GITHUB_REPO" \
-      --color "FBCA04" --description "Risk seviyesi Codex deep review gerektiriyor" 2>&1 || true
-    gh label create "ready-for-human-approval" --repo "$GITHUB_REPO" \
-      --color "0E8A16" --description "CI ve Codex geçti, Şef onayı bekleniyor" 2>&1 || true
+    GITHUB_SETUP_FAILED=0
+
+    # NOT (Codex review bulgusu — P2): eskiden bu adımlar `|| true` ile
+    # SESSİZCE yutuluyor, script sonunda yine de "tamamlandı" diyordu —
+    # gerçek bir yetki/API hatası fark edilmeden geçebiliyordu. Artık her
+    # adımın çıktısı/exit kodu kontrol ediliyor; "already exists" gibi
+    # ZATEN BEKLENEN durumlar sessiz kalıyor, GERÇEK hatalar açıkça
+    # raporlanıyor ve script sonunda "BAŞARISIZ" özetine giriyor.
+    for label_args in \
+      'needs-codex-review|FBCA04|Risk seviyesi Codex deep review gerektiriyor' \
+      'ready-for-human-approval|0E8A16|CI ve Codex geçti, Şef onayı bekleniyor'
+    do
+      IFS='|' read -r lbl color desc <<< "$label_args"
+      # NOT: `set -e` altında `X=$(cmd) || true` ASLA çalışmaz gibi
+      # görünür çünkü `|| true` komut ikamesinin exit kodunu MASKELER —
+      # bu tam olarak bu repoda daha önce `grep -c` ile yaşanan bug'ın
+      # aynısı. Exit kodunu `|| LABEL_EXIT=$?` ile AYRI yakalıyoruz.
+      LABEL_EXIT=0
+      LABEL_OUTPUT=$(gh label create "$lbl" --repo "$GITHUB_REPO" --color "$color" --description "$desc" 2>&1) || LABEL_EXIT=$?
+      if [[ "$LABEL_EXIT" -ne 0 && "$LABEL_OUTPUT" != *"already exists"* ]]; then
+        echo "HATA: '$lbl' label'ı oluşturulamadı: $LABEL_OUTPUT" >&2
+        GITHUB_SETUP_FAILED=1
+      fi
+    done
 
     # NOT: required_status_checks context'leri GERÇEK adlarla BİREBİR
     # eşleşmeli — context adı job adıyla eşleşmezse branch protection asla
@@ -249,7 +269,7 @@ if [[ -n "$GITHUB_REPO" ]]; then
     #     circuit breaker + secret rotasyonu hepsi buna dahil, bkz.
     #     verification.yml + verifier.py cmd_gate). Codex review bulgusu:
     #     önceden hiçbir status bu kararı GERÇEKTEN merge'e bağlamıyordu.
-    gh api "repos/$GITHUB_REPO/branches/main/protection" --method PUT --input - <<'EOF' 2>&1 || true
+    PROTECTION_OUTPUT=$(gh api "repos/$GITHUB_REPO/branches/main/protection" --method PUT --input - <<'EOF' 2>&1
 {
   "required_status_checks": {
     "strict": true,
@@ -266,7 +286,19 @@ if [[ -n "$GITHUB_REPO" ]]; then
   "allow_deletions": false
 }
 EOF
-    echo "GitHub kurulumu tamamlandı (label'lar + branch protection)."
+) || PROTECTION_EXIT=$?
+    if [[ "${PROTECTION_EXIT:-0}" -ne 0 ]]; then
+      echo "HATA: Branch protection kurulamadı:" >&2
+      echo "$PROTECTION_OUTPUT" >&2
+      GITHUB_SETUP_FAILED=1
+    fi
+
+    if [[ "$GITHUB_SETUP_FAILED" -eq 1 ]]; then
+      echo "GitHub kurulumu KISMEN BAŞARISIZ oldu — yukarıdaki hataları giderip" >&2
+      echo "elle tekrar deneyin (bkz. .github/branch-protection.md)." >&2
+    else
+      echo "GitHub kurulumu tamamlandı (label'lar + branch protection)."
+    fi
   fi
 else
   echo "owner/repo verilmedi — GitHub kurulumu (label/branch protection) atlandı."
