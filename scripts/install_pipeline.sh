@@ -97,7 +97,7 @@ safe_write_start() {
 mkdir -p "$TARGET_DIR/orchestrator"
 for f in router.py verifier.py ledger.py circuit_breaker.py notifier.py \
          alert_and_rotate.py trufflehog_result.py ac_lock.py finding_triage.py \
-         requirements.txt schema.sql; do
+         usage_tracker.py requirements.txt schema.sql; do
   safe_copy "$SOURCE_REPO_ROOT/orchestrator/$f" "$TARGET_DIR/orchestrator/$f"
 done
 echo "kopyalandı: orchestrator/"

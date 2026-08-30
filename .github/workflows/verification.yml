@@ -202,6 +202,22 @@ jobs:
           # (verification-gate dahil) yine de çalışmalı, o yüzden `|| true`.
           # Asıl karar merci ledger + verification-gate'tir, bu adımın
           # exit code'u değil.
+      - name: Kullanım sayacını artır ve eşikleri kontrol et (maliyet görünürlüğü)
+        # Codex'in önerdiği özellik: her `codex exec review` çağrısı bu
+        # pipeline'ın asıl maliyet sürücüsüdür. Postgres'te günlük sayaç
+        # tutuluyor, WARN/CRITICAL eşiği aşılırsa Telegram'a bildirim
+        # gidiyor — ama pipeline KENDİ KENDİNE DURMUYOR (claude.md politikası).
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Repo Variables (Settings → Secrets and variables → Actions →
+          # Variables) ile özelleştirilebilir; tanımlı değilse script'in
+          # kendi varsayılanlarına (10/20) düşer.
+          CODEX_DAILY_WARN_THRESHOLD: ${{ vars.CODEX_DAILY_WARN_THRESHOLD }}
+          CODEX_DAILY_CRITICAL_THRESHOLD: ${{ vars.CODEX_DAILY_CRITICAL_THRESHOLD }}
+        run: |
+          python3 "${{ steps.stage.outputs.dir }}/orchestrator/usage_tracker.py" record \
+            --repo "$GITHUB_REPOSITORY" --event-type codex_review || true
 
   low-risk-fast-path:
     name: Low Risk — Doğrudan Şef Onayına Geç

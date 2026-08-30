@@ -43,6 +43,7 @@ ORCHESTRATOR_FILES=(
   "trufflehog_result.py"
   "ac_lock.py"
   "finding_triage.py"
+  "usage_tracker.py"
   "requirements.txt"
   "schema.sql"
 )
