@@ -65,14 +65,14 @@ copy_dir() {
 # --- orchestrator/ (stack-agnostic, olduğu gibi kopyalanır) ---
 mkdir -p "$TARGET_DIR/orchestrator"
 for f in router.py verifier.py ledger.py circuit_breaker.py notifier.py \
-         alert_and_rotate.py trufflehog_result.py requirements.txt schema.sql; do
+         alert_and_rotate.py trufflehog_result.py ac_lock.py requirements.txt schema.sql; do
   cp "$SOURCE_REPO_ROOT/orchestrator/$f" "$TARGET_DIR/orchestrator/$f"
 done
 echo "kopyalandı: orchestrator/"
 
 # --- scripts/ ---
 mkdir -p "$TARGET_DIR/scripts/git-hooks"
-for f in lock_ac.sh verify_ac_lock.sh check_stripe_key_mode.sh \
+for f in lock_ac.sh verify_ac_lock.sh verify_ac_lock.py check_stripe_key_mode.sh \
          check_new_dependencies.py pin_trusted_files.sh generate_ci_workflow.py \
          stage_trusted_orchestrator.sh; do
   cp "$SOURCE_REPO_ROOT/scripts/$f" "$TARGET_DIR/scripts/$f"

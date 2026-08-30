@@ -231,8 +231,24 @@ jobs:
     needs: secret-scan
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Güvenilir AC lock doğrulayıcıyı main'den stage'le
+        # PR checkout'undan çalıştırmak, PR'ın verify_ac_lock.py'yi
+        # değiştirip kontrolü etkisizleştirmesine izin verirdi (Codex
+        # review bulgusu — aynı sınıf risk, bkz. stage_trusted_orchestrator.sh).
+        id: stage
+        run: |
+          TRUSTED_DIR=$(git show origin/main:scripts/stage_trusted_orchestrator.sh | bash -s -- "$RUNNER_TEMP/trusted-orchestrator")
+          echo "dir=$TRUSTED_DIR" >> "$GITHUB_OUTPUT"
+      - name: Python kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Orchestrator bağımlılıklarını kur (psycopg — AC lock artık Postgres'te)
+        run: pip install -r "${{ steps.stage.outputs.dir }}/orchestrator/requirements.txt"
       - name: AC lock doğrula
-        run: bash scripts/verify_ac_lock.sh
+        run: python3 "${{ steps.stage.outputs.dir }}/scripts/verify_ac_lock.py"
 
 """
 
