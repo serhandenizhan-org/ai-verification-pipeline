@@ -63,6 +63,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_branch }}
+
+      - name: Python kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Yeni bağımlılıkları tespit et (tedarik zinciri metadata'sı)
+        id: deps
+        run: |
+          python3 scripts/check_new_dependencies.py --base origin/main --head HEAD > new_deps_report.json
+          echo "found=$(python3 -c 'import json; print(json.load(open("new_deps_report.json"))["new_dependencies_found"])')" >> "$GITHUB_OUTPUT"
 
       - name: Codex review tetikle (YER TUTUCU — gerçek entegrasyonla değiştirin)
         env:
@@ -72,6 +86,23 @@ jobs:
           echo "Risk seviyesi LOW değil, Codex review gerekiyor."
           gh pr comment "$PR_NUMBER" --body "@codex review — bu PR risk seviyesi nedeniyle deep review gerektiriyor."
           gh pr edit "$PR_NUMBER" --add-label "needs-codex-review"
+
+          if [[ "${{ steps.deps.outputs.found }}" != "0" ]]; then
+            {
+              echo "## 🔎 Tedarik Zinciri (Supply-Chain) Ön Raporu"
+              echo ""
+              echo "Bu PR'da ${{ steps.deps.outputs.found }} yeni bağımlılık tespit edildi."
+              echo "Reviewer Codex, aşağıdaki ham registry metadata'sını"
+              echo "\`verification/codex/severity_rules.md\` > Tedarik Zinciri"
+              echo "bölümüne göre değerlendirmelidir (bu rapor bir güvenlik"
+              echo "kararı değildir, yalnızca ham veridir):"
+              echo ""
+              echo '```json'
+              cat new_deps_report.json
+              echo '```'
+            } > new_deps_comment.md
+            gh pr comment "$PR_NUMBER" --body-file new_deps_comment.md
+          fi
 
       # Codex sonucu geldiğinde (Codex'in kendi entegrasyonuna göre —
       # webhook, ayrı bir workflow, ya da manuel Şef girişi) aşağıdaki
