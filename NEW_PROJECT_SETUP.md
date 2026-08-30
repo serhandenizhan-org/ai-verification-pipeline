@@ -81,8 +81,22 @@ cp .env.example .env
 - `STRIPE_SECRET_KEY` vb. — yalnızca proje ödeme entegrasyonu kullanıyorsa,
   **sk_test_** ile başlayan test key
 - `DATABASE_URL` — ledger için, varsayılan zaten Mac mini'deki local Postgres'e
-  işaret ediyor, değiştirmene gerek yok (tüm projeler AYNI ledger DB'sini
-  paylaşıyor, `pr` alanı repo bazlı ayrım yapmıyor — bkz. "Bilinen kısıt" altı)
+  işaret ediyor, değiştirmene gerek yok
+
+**ÖNEMLİ (Codex review bulgusu — P2): `.env` yalnızca YEREL elle çalıştırma
+içindir, CI bunu hiç okumaz.** Telegram bildirimlerinin CI'da (self-hosted
+runner'da çalışan `verification.yml`) çalışması için `.env`'e ek olarak
+**GitHub Secrets'a da elle eklemen gerekiyor**:
+
+```bash
+gh secret set TELEGRAM_BOT_TOKEN --repo owner/yeni-proje-repo-adi
+gh secret set TELEGRAM_CHAT_ID --repo owner/yeni-proje-repo-adi
+```
+
+Bunu atlarsan CI'da Telegram bildirimleri sessizce (yalnızca stderr
+uyarısıyla) atlanır — pipeline'ı bloklamaz ama Şef habersiz kalır.
+`.env.example`'daki başlık notu bu üç katmanı (yerel/CI/breaker eşikleri)
+ayrıntılı açıklıyor.
 
 ### 3. `ci.yml`'i gözden geçir (artık elle yazmıyorsun)
 
