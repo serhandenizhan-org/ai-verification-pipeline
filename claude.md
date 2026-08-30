@@ -3,6 +3,15 @@
 Bu dosya, bu repoda çalışan tüm Claude ajanları (Orchestrator ve Builder) için
 kalıcı bağlam dosyasıdır. Her önemli değişiklikte güncel tutulmalıdır.
 
+**BU REPO ORCHESTRATOR'IN SABİT ÇALIŞMA ALANIDIR.** Şef, yeni bir proje
+fikrini/mimarisini konuşmak istediğinde Claude Code'u HER ZAMAN bu klasörde
+açar (`.claude/settings.json` modeli otomatik Opus'a sabitliyor — elle
+`/model` yapmaya gerek yok). Burada konuşulan mimari kararlar sonunda
+Orchestrator, gerçek projenin kendi `CLAUDE.md`'sini üretip (bkz.
+`specs/builder_claude_template.md`) Builder'a ilk prompt'u verir — Builder
+o noktadan sonra PROJENİN KENDİ klasöründe, ayrı bir Claude Code sohbetinde
+çalışır (bkz. `NEW_PROJECT_SETUP.md`).
+
 ## Proje Nedir
 
 Bu repo, AI Verification Pipeline sisteminin kendisidir: Claude'un builder

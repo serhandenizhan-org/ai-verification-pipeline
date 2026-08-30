@@ -40,10 +40,27 @@ Bu adım şunları yapar (otomatik):
   `.env.example`, `.github/workflows/verification.yml` kopyalanır
 - `.github/workflows/ci.yml.example` kopyalanır (DİKKAT: `.example` uzantılı,
   aktif değil — bkz. madde 3)
+- `CLAUDE.md` (Builder rolü, `specs/builder_claude_template.md`'den) +
+  `.claude/settings.json` (`{"model": "sonnet"}`) oluşturulur — bu projede
+  Claude Code açtığında **otomatik Builder rolünde ve Sonnet'te** başlar,
+  sen "sen builder'sın" demene gerek kalmaz
 - `.git/hooks/pre-commit` kurulur (gitleaks)
 - `.gitignore`'a pipeline ekleri eklenir
 - (owner/repo verildiyse) `needs-codex-review`/`ready-for-human-approval`
   label'ları + solo-friendly branch protection kurulur
+
+### Orchestrator ↔ Builder ayrımı — nasıl çalışıyor
+
+- **Orchestrator**: HER ZAMAN `ai-verification-pipeline` reposunda (bu repo)
+  Claude Code açarsın. `.claude/settings.json` orada `{"model": "opus"}` —
+  otomatik Opus. Burada mimariyi konuşursun, feature AC'lerini yazarsın.
+- **Builder**: HER ZAMAN gerçek projenin kendi klasöründe Claude Code
+  açarsın (ayrı bir sohbet/terminal penceresi). O projenin `CLAUDE.md`'si
+  otomatik yüklenir, `.claude/settings.json` orada `{"model": "sonnet"}`.
+  Burada kod yazdırırsın.
+- İkisi TAMAMEN ayrı Claude Code oturumları/pencereleridir — birinden
+  diğerine mesaj geçmez, sen (Şef) ikisi arasında köprüsün (Orchestrator'ın
+  ürettiği talimatı kopyalayıp Builder'a yapıştırırsın, ya da tam tersi).
 
 ### 2. `.env` doldur
 

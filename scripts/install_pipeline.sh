@@ -86,6 +86,20 @@ cp "$SOURCE_REPO_ROOT/specs/features/example-feature/acceptance_criteria.yaml" \
    "$TARGET_DIR/specs/features/example-feature/acceptance_criteria.yaml"
 echo "kopyalandı: specs/"
 
+# --- CLAUDE.md (Builder rolü, sabit) + model pinning ---
+# Orchestrator (ai-verification-pipeline reposu) her zaman Opus'a sabit;
+# Builder (bu hedef proje) her zaman Sonnet'e sabit. İkisi de ayrı Claude
+# Code sohbeti/oturumu olarak açılır — Şef "sen builder'sın" demek zorunda
+# kalmaz, .claude/settings.json + CLAUDE.md otomatik yüklenir.
+cp "$SOURCE_REPO_ROOT/specs/builder_claude_template.md" "$TARGET_DIR/CLAUDE.md"
+mkdir -p "$TARGET_DIR/.claude"
+cat > "$TARGET_DIR/.claude/settings.json" <<'SETTINGS_EOF'
+{
+  "model": "sonnet"
+}
+SETTINGS_EOF
+echo "kopyalandı: CLAUDE.md (Builder rolü) + .claude/settings.json (model: sonnet)"
+
 # --- verification/ (Codex kuralları + trufflehog dokümantasyonu) ---
 mkdir -p "$TARGET_DIR/verification/codex" "$TARGET_DIR/verification/trufflehog"
 cp "$SOURCE_REPO_ROOT/verification/codex/severity_rules.md" \
