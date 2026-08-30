@@ -2,12 +2,11 @@
 # Risk seviyesini hesaplar, seviyeye göre Reviewer Codex'i tetikler,
 # sonuçları Verification Ledger'a yazar ve gerekirse Şef'e bildirim gönderir.
 #
-# NOT: Codex entegrasyonu (aşağıdaki "codex-review" job'ı) burada bir
-# YER TUTUCUDUR. Kullanacağınız Codex erişim yöntemine göre (resmi GitHub
-# App, CLI, veya API) bu adımı gerçek komutla değiştirmeniz gerekir.
-# Şu an için: PR'a "needs-codex-review" etiketi eklenir ve bir yorum
-# bırakılır — Codex GitHub App'i kurulduğunda bu tetikleyiciyi
-# kullanacak şekilde ayarlanabilir.
+# Codex entegrasyonu: `codex` CLI (Codex CLI, ChatGPT hesabıyla login,
+# bkz. HANDOFF.md 4.8) self-hosted runner'da zaten authenticated. Kör
+# (blind) review ilkesi gereği bu job Orchestrator'ın adversarial
+# bulgularını GÖRMEDEN çalışır — böyle bir not bu repoda zaten üretilmiyor,
+# yalnızca severity_rules.md'deki formatı referans alıyor.
 
 name: Verification
 
@@ -33,7 +32,21 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.workflow_run.head_branch }}
+          # head_branch YETERSİZ: fork PR'larda bu branch base repo'da
+          # bulunmuyor, checkout sessizce/açıkça fail eder (Codex review
+          # bulgusu). head_sha immutable ve her durumda çözülebilir.
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Orchestrator/agent kontrol dosyalarını main'den sabitle (PR bunları değiştiremesin)
+        # Codex review bulgusu: bu job PR'ın kendi orchestrator/*.py ve
+        # requirements.txt'sini çalıştırıyor — kötü niyetli bir PR bunları
+        # değiştirip runner'ın GITHUB_TOKEN/Postgres erişimini kötüye
+        # kullanabilir. Bu dosyalar HER ZAMAN origin/main'den ezilir.
+        #
+        # ÖNEMLİ: script'in KENDİSİ de PR checkout'undan çalıştırılırsa
+        # kötü niyetli bir PR onu no-op'a çevirebilir — bu yüzden script'i
+        # PR kopyasından değil, doğrudan origin/main'den çekip çalıştırıyoruz.
+        run: git show origin/main:scripts/pin_trusted_files.sh | bash
 
       - name: Python kur
         uses: actions/setup-python@v5
@@ -68,12 +81,24 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.workflow_run.head_branch }}
+          # head_branch YETERSİZ: fork PR'larda bu branch base repo'da
+          # bulunmuyor, checkout sessizce/açıkça fail eder (Codex review
+          # bulgusu). head_sha immutable ve her durumda çözülebilir.
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Orchestrator/agent kontrol dosyalarını main'den sabitle (PR bunları değiştiremesin)
+        # Aynı gerekçe: bu job hem orchestrator/verifier.py'ı hem de
+        # AGENTS.md'yi (codex exec review'ın authenticated okuduğu dosya)
+        # çalıştırıyor — ikisi de PR ne yazarsa yazsın main'den gelmeli.
+        run: git show origin/main:scripts/pin_trusted_files.sh | bash
 
       - name: Python kur
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Orchestrator bağımlılıklarını kur (psycopg — Postgres ledger için)
+        run: pip install -r orchestrator/requirements.txt
 
       - name: Yeni bağımlılıkları tespit et (tedarik zinciri metadata'sı)
         id: deps
@@ -81,24 +106,61 @@ jobs:
           python3 scripts/check_new_dependencies.py --base origin/main --head HEAD > new_deps_report.json
           echo "found=$(python3 -c 'import json; print(json.load(open("new_deps_report.json"))["new_dependencies_found"])')" >> "$GITHUB_OUTPUT"
 
-      - name: Codex review tetikle (YER TUTUCU — gerçek entegrasyonla değiştirin)
+      - name: needs-codex-review etiketini ekle
+        env:
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr edit "$PR_NUMBER" --add-label "needs-codex-review"
+
+      - name: Codex review çalıştır (kör — Orchestrator'ın adversarial notlarını görmez)
+        # Talimatlar --base ile birlikte custom PROMPT verilemediği için
+        # (codex CLI kısıtı) repo kökündeki AGENTS.md'den otomatik okunuyor
+        # (severity_rules.md formatı, kör review ilkesi, tedarik zinciri).
+        id: codex
+        run: |
+          set +e
+          codex exec review \
+            --base origin/main \
+            --skip-git-repo-check \
+            -o codex_last_message.txt
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Bulgu sayılarını çıkar
+        # codex exec review kendi P1/P2/P3 öncelik şablonunu kullanıyor
+        # (AGENTS.md'deki literal [BLOCKING]/[ADVISORY] formatı denendi,
+        # review modu bunu yok sayıyor — bkz. AGENTS.md "Çıktı formatı").
+        # P1 -> BLOCKING, P2/P3 -> ADVISORY eşlemesi kullanılıyor.
+        # NOT: grep -c eşleşme yoksa "0" YAZAR ama exit code 1 döner —
+        # `|| echo 0` kullanmak "0\n0" gibi çift satır üretip $GITHUB_OUTPUT'u
+        # bozar (bu da bir Codex review bulgusuydu). Bunun yerine değişkeni
+        # boşsa 0'a düşürüyoruz.
+        id: findings
+        run: |
+          BLOCKING=$(grep -c '^- \[P1\]' codex_last_message.txt 2>/dev/null); BLOCKING=${BLOCKING:-0}
+          ADVISORY=$(grep -cE '^- \[(P2|P3)\]' codex_last_message.txt 2>/dev/null); ADVISORY=${ADVISORY:-0}
+          echo "blocking=$BLOCKING" >> "$GITHUB_OUTPUT"
+          echo "advisory=$ADVISORY" >> "$GITHUB_OUTPUT"
+
+      - name: Rapor + tedarik zinciri ön raporunu PR'a yorum olarak bırak
         env:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Risk seviyesi LOW değil, Codex review gerekiyor."
-          gh pr comment "$PR_NUMBER" --body "@codex review — bu PR risk seviyesi nedeniyle deep review gerektiriyor."
-          gh pr edit "$PR_NUMBER" --add-label "needs-codex-review"
+          {
+            echo "## 🤖 Reviewer Codex — Deep Review"
+            echo ""
+            echo "Bulgu: ${{ steps.findings.outputs.blocking }} BLOCKING, ${{ steps.findings.outputs.advisory }} ADVISORY"
+            echo ""
+            cat codex_last_message.txt
+          } > codex_comment.md
+          gh pr comment "$PR_NUMBER" --body-file codex_comment.md
 
           if [[ "${{ steps.deps.outputs.found }}" != "0" ]]; then
             {
               echo "## 🔎 Tedarik Zinciri (Supply-Chain) Ön Raporu"
               echo ""
-              echo "Bu PR'da ${{ steps.deps.outputs.found }} yeni bağımlılık tespit edildi."
-              echo "Reviewer Codex, aşağıdaki ham registry metadata'sını"
-              echo "\`verification/codex/severity_rules.md\` > Tedarik Zinciri"
-              echo "bölümüne göre değerlendirmelidir (bu rapor bir güvenlik"
-              echo "kararı değildir, yalnızca ham veridir):"
+              echo "Bu PR'da ${{ steps.deps.outputs.found }} yeni bağımlılık tespit edildi,"
+              echo "Codex yukarıdaki incelemede bunu değerlendirdi. Ham veri:"
               echo ""
               echo '```json'
               cat new_deps_report.json
@@ -107,16 +169,22 @@ jobs:
             gh pr comment "$PR_NUMBER" --body-file new_deps_comment.md
           fi
 
-      # Codex sonucu geldiğinde (Codex'in kendi entegrasyonuna göre —
-      # webhook, ayrı bir workflow, ya da manuel Şef girişi) aşağıdaki
-      # komutla ledger'a yazılmalıdır:
-      #
-      #   python3 orchestrator/verifier.py record-codex \
-      #     --pr "$PR_NUMBER" \
-      #     --status PASS|FAIL \
-      #     --findings-json '{"blocking": 0, "advisory": 2}' \
-      #     --report-url "<codex-raporu-linki>" \
-      #     --pr-url "<pr-linki>"
+      - name: Sonucu ledger'a yaz
+        env:
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          PR_URL: ${{ github.event.workflow_run.pull_requests[0].html_url }}
+        run: |
+          CODEX_STATUS="PASS"
+          if [[ "${{ steps.codex.outputs.exit_code }}" != "0" ]]; then
+            CODEX_STATUS="FAIL"
+          fi
+          python3 orchestrator/verifier.py record-codex \
+            --pr "$PR_NUMBER" \
+            --status "$CODEX_STATUS" \
+            --findings-json "{\"blocking\": ${{ steps.findings.outputs.blocking }}, \"advisory\": ${{ steps.findings.outputs.advisory }}}" \
+            --report-url "$PR_URL" \
+            --pr-url "$PR_URL" \
+            --failure-text "codex exec review exit_code=${{ steps.codex.outputs.exit_code }}"
 
   low-risk-fast-path:
     name: Low Risk — Doğrudan Şef Onayına Geç
