@@ -56,10 +56,12 @@ def detect_node(root: Path) -> dict | None:
             dev_deps = data.get("devDependencies", {}) or {}
             deps = data.get("dependencies", {}) or {}
             has_playwright = "@playwright/test" in dev_deps or "@playwright/test" in deps
+            has_stripe = "stripe" in deps or "stripe" in dev_deps
             return {
                 "dir": sub,
                 "scripts": {k: v for k, v in scripts.items() if k in ("lint", "typecheck", "test", "build")},
                 "has_playwright": has_playwright,
+                "has_stripe": has_stripe,
             }
     return None
 
@@ -162,20 +164,41 @@ def build_python_job(py: dict) -> str:
 """
 
 
-def build_e2e_job(needs: list[str]) -> str:
+def build_e2e_job(needs: list[str], has_stripe: bool = False) -> str:
     needs_str = ", ".join(needs)
+
+    stripe_env = ""
+    stripe_guard_step = ""
+    stripe_docker_env = ""
+    if has_stripe:
+        # ÖNEMLİ (Codex review bulgusu — P1): Guard HOST'ta, container'a
+        # secret hiç verilmeden ÖNCE çalışıyor. Eski tasarımda key
+        # doğrudan `docker run -e` ile container'a veriliyor, guard ise
+        # container İÇİNDE `npm ci` SIRASINDAN SONRA çalışıyordu — yani
+        # PR'ın kendi lifecycle script'leri (npm ci sırasında) guard hiç
+        # çalışmadan key'e erişebiliyordu. Artık key, guard geçmeden
+        # container'a hiç ulaşmıyor.
+        stripe_env = """    env:
+      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
+"""
+        stripe_guard_step = """      - name: Stripe key modunu doğrula (host'ta, container'a VERİLMEDEN ÖNCE)
+        run: bash scripts/check_stripe_key_mode.sh
+
+"""
+        stripe_docker_env = '            -e STRIPE_SECRET_KEY="$STRIPE_SECRET_KEY" \\\n'
+
     return f"""  e2e-playwright:
     name: Playwright E2E
     runs-on: [self-hosted, macOS, ARM64]
     needs: [{needs_str}]
-    steps:
+{stripe_env}    steps:
       - uses: actions/checkout@v4
 
-      - name: E2E testleri (container içinde, izole)
+{stripe_guard_step}      - name: E2E testleri (container içinde, izole)
         run: |
           docker run --rm \\
             --ipc=host \\
-            -v "$PWD":/workspace -w /workspace \\
+{stripe_docker_env}            -v "$PWD":/workspace -w /workspace \\
             mcr.microsoft.com/playwright:v1.48.0-jammy \\
             bash -c "
               set -euo pipefail
@@ -311,8 +334,10 @@ def generate(root: Path) -> tuple[str, list[str]]:
         e2e_needs.append("frontend-test")
         notes.append(f"Frontend tespit edildi: '{node['dir'] or '.'}' (scripts={list(node['scripts'].keys())})")
         if node["has_playwright"]:
-            body += build_e2e_job(e2e_needs)
+            body += build_e2e_job(e2e_needs, has_stripe=node["has_stripe"])
             notes.append("Playwright tespit edildi, E2E job'ı eklendi.")
+            if node["has_stripe"]:
+                notes.append("Stripe bağımlılığı tespit edildi, E2E job'ına test-mode key guard'ı eklendi.")
 
     if not node and not py:
         notes.append(
