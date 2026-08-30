@@ -41,13 +41,14 @@ ORCHESTRATOR_FILES=(
   "notifier.py"
   "alert_and_rotate.py"
   "trufflehog_result.py"
+  "ac_lock.py"
   "requirements.txt"
   "schema.sql"
 )
 
 SCRIPT_FILES=(
   "check_new_dependencies.py"
-  "verify_ac_lock.sh"
+  "verify_ac_lock.py"
 )
 
 for f in "${ORCHESTRATOR_FILES[@]}"; do
