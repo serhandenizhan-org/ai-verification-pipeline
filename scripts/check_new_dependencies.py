@@ -7,19 +7,35 @@ DEĞİL, ilk kez eklenen paketleri) tespit eder ve npm/PyPI registry'sinden
 Reviewer Codex'in tedarik zinciri (supply-chain) incelemesi için gereken
 ham metadata'yı çeker: ilk yayın tarihi, son güncelleme, maintainer bilgisi.
 
-Bu script BİLİNÇLİ OLARAK bir "güvenli/güvensiz" kararı VERMEZ — Codex'in
-kendi eğitim verisinden tahmin yürütmesi yerine, kör (blind) review'ında
-yorumlayacağı gerçek zamanlı veriyi sağlar. Bilinen CVE taraması bu
-script'in işi değildir (bkz. `npm audit` / `pip-audit` / osv-scanner,
-DoD'de zaten zorunlu).
+ÖNEMLİ (Codex review bulgusu — P1): Eski sürüm `git diff` ÇIKTISINI satır
+satır regex'le parse ediyordu — bu üç ayrı şekilde yanlış sonuç
+üretiyordu:
+  1. PEP 621 formatlı `pyproject.toml` bağımlılıkları ("requests>=2" gibi
+     TOML dizi elemanları) regex'le eşleşmiyordu, tamamen KAÇIYORDU.
+  2. npm'de "scripts" gibi bir anahtarın altındaki key'ler (ör.
+     "build": "vite build") paket sanılabiliyordu.
+  3. `git diff` komutu HATA verirse (ör. base ref bulunamazsa) sessizce
+     boş sonuç dönüp "yeni paket yok" diye raporlanıyordu — registry
+     erişim hatasından FARKLI bir durum, ama aynı şekilde ele alınıyordu.
+
+ÇÖZÜM: Artık diff satırlarını regex'lemek yerine, base ve head
+commit'lerindeki TAM manifest dosyalarını (`git show <ref>:<path>`)
+GERÇEK parser'larla (JSON için `json`, TOML için `tomllib`, requirements.txt
+için PEP 508 uyumlu bir regex TEK SATIRIN TAMAMINA, diff prefix'ine değil)
+okuyup bağımlılık İSİMLERİ kümesini karşılaştırıyor. Bu hem PEP 621'i
+doğru okuyor hem npm'in yalnızca gerçek dependency/devDependency
+anahtarlarına bakıyor.
+
+Git/parse hatası artık AYRI bir "error" alanında raporlanıyor ve script
+bu durumda exit 1 dönüyor — "registry'e ulaşılamadı" (ADVISORY, devam
+edilebilir) ile "manifest hiç okunamadı" (analiz güvenilir değil)
+KARIŞTIRILMIYOR.
+
+Bilinen CVE taraması bu script'in işi değildir (bkz. `npm audit` /
+`pip-audit` / osv-scanner, DoD'de zaten zorunlu).
 
 Kullanım:
     python3 scripts/check_new_dependencies.py --base origin/main --head HEAD
-
-Çıktı: structured JSON, stdout'a. Registry'e ulaşılamazsa (ağ hatası,
-zaman aşımı) o paket için metadata alanları null bırakılır — script
-ASLA bu yüzden fail etmez, sadece eksik veriyle devam eder (Codex,
-eksik metadata'yı kendisi ADVISORY olarak işaretleyebilir).
 """
 
 from __future__ import annotations
@@ -32,82 +48,100 @@ import sys
 import urllib.error
 import urllib.request
 
+try:
+    import tomllib
+except ImportError:  # Python < 3.11
+    tomllib = None
+
 REQUEST_TIMEOUT = 10
 
-NPM_MANIFESTS = ["package.json"]
-PYTHON_MANIFESTS = ["requirements.txt", "pyproject.toml", "Pipfile"]
+NPM_MANIFEST = "package.json"
+PYTHON_MANIFESTS = ["requirements.txt", "pyproject.toml"]
 
-# "dependencies"/"devDependencies" içindeki satırlar: "paket-adi": "^1.2.3"
-NPM_LINE_RE = re.compile(r'^\+\s*"([A-Za-z0-9@/_.-]+)"\s*:\s*"[^"]+"\s*,?\s*$')
-
-# requirements.txt: paket-adi==1.2.3 / paket-adi>=1.2.3 / paket-adi
-PY_REQ_LINE_RE = re.compile(r'^\+\s*([A-Za-z0-9_.-]+)\s*(==|>=|<=|~=|>|<)?')
-
-# pyproject.toml (PEP 621 / poetry) satırları: paket-adi = "^1.2.3" veya "paket-adi>=1.2.3",
-PY_TOML_LINE_RE = re.compile(r'^\+\s*"?([A-Za-z0-9_.-]+)"?\s*=')
+# PEP 508 paket adı grameri (basitleştirilmiş): harf/rakamla başlar,
+# içinde -._ olabilir. Versiyon belirteci (==, >=, ;, [extra]) öncesi
+# kısım paket adıdır. Bu, TAM SATIR üzerinde çalışır (diff prefix'i değil).
+PY_PACKAGE_NAME_RE = re.compile(r'^\s*"?([A-Za-z0-9][A-Za-z0-9._-]*)')
 
 
-def git_diff(base: str, head: str, paths: list[str]) -> str:
-    """İlgili manifest dosyalarının diff'ini döndürür; dosya yoksa boş string."""
-    try:
-        result = subprocess.run(
-            ["git", "diff", f"{base}...{head}", "--"] + paths,
-            capture_output=True, text=True, check=True,
-        )
+class GitError(Exception):
+    """git komutu beklenmedik şekilde başarısız oldu — bu 'dosya yok' değil, GERÇEK bir hata."""
+
+
+def git_show(ref: str, path: str) -> str | None:
+    """
+    `ref` üzerindeki `path` dosyasının tam içeriğini döndürür.
+    Dosya o ref'te hiç yoksa None döner (GEÇERLİ bir durum — ör. base'de
+    henüz eklenmemiş bir manifest). Başka bir git hatası (bozuk ref,
+    erişilemeyen repo vb.) GitError fırlatır — bu SESSİZCE yutulmaz.
+    """
+    result = subprocess.run(
+        ["git", "show", f"{ref}:{path}"],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
         return result.stdout
-    except subprocess.CalledProcessError:
-        return ""
+    stderr = result.stderr.lower()
+    if "does not exist" in stderr or "exists on disk, but not in" in stderr:
+        return None  # dosya o ref'te yok — geçerli, "henüz eklenmemiş" demek
+    raise GitError(f"git show {ref}:{path} başarısız: {result.stderr.strip()}")
 
 
-def extract_added_npm_deps(diff_text: str) -> set[str]:
-    names = set()
-    for line in diff_text.splitlines():
-        if line.startswith("+++") or line.startswith("---"):
-            continue
-        m = NPM_LINE_RE.match(line)
-        if m:
-            key = m.group(1)
-            if key not in ("name", "version", "description", "main", "scripts",
-                            "dependencies", "devDependencies", "engines", "license"):
-                names.add(key)
+def npm_dependency_names(content: str | None) -> set[str]:
+    if content is None:
+        return set()
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        raise GitError(f"package.json parse edilemedi (bozuk JSON)")
+    names = set(data.get("dependencies", {}) or {})
+    names |= set(data.get("devDependencies", {}) or {})
     return names
 
 
-def extract_added_python_deps(diff_text: str) -> set[str]:
+def requirements_txt_names(content: str | None) -> set[str]:
+    if content is None:
+        return set()
     names = set()
-    for line in diff_text.splitlines():
-        if line.startswith("+++") or line.startswith("---"):
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or line.startswith("-"):
             continue
-        if line.startswith("+#") or line.strip() == "+":
-            continue
-        m = PY_REQ_LINE_RE.match(line) or PY_TOML_LINE_RE.match(line)
+        m = PY_PACKAGE_NAME_RE.match(line)
         if m:
             names.add(m.group(1).lower())
     return names
 
 
-def removed_python_deps(diff_text: str) -> set[str]:
-    """Silinen (-) satırlardaki paket adları — 'yeni eklenen' sayılmaması için."""
-    names = set()
-    for line in diff_text.splitlines():
-        if not line.startswith("-") or line.startswith("---"):
-            continue
-        rebuilt = "+" + line[1:]
-        m = PY_REQ_LINE_RE.match(rebuilt) or PY_TOML_LINE_RE.match(rebuilt)
+def pyproject_toml_names(content: str | None) -> set[str]:
+    if content is None:
+        return set()
+    if tomllib is None:
+        raise GitError("tomllib mevcut değil (Python < 3.11) — pyproject.toml parse edilemiyor")
+    try:
+        data = tomllib.loads(content)
+    except tomllib.TOMLDecodeError:
+        raise GitError("pyproject.toml parse edilemedi (bozuk TOML)")
+
+    names: set[str] = set()
+
+    # PEP 621: [project] dependencies = ["requests>=2", "click"]
+    project_deps = (data.get("project") or {}).get("dependencies", []) or []
+    for dep_str in project_deps:
+        m = PY_PACKAGE_NAME_RE.match(dep_str)
         if m:
             names.add(m.group(1).lower())
-    return names
+    optional_deps = (data.get("project") or {}).get("optional-dependencies", {}) or {}
+    for dep_list in optional_deps.values():
+        for dep_str in dep_list:
+            m = PY_PACKAGE_NAME_RE.match(dep_str)
+            if m:
+                names.add(m.group(1).lower())
 
+    # Poetry: [tool.poetry.dependencies] requests = "^2.0"
+    poetry_deps = ((data.get("tool") or {}).get("poetry") or {}).get("dependencies", {}) or {}
+    names |= {k.lower() for k in poetry_deps if k.lower() != "python"}
 
-def removed_npm_deps(diff_text: str) -> set[str]:
-    names = set()
-    for line in diff_text.splitlines():
-        if not line.startswith("-") or line.startswith("---"):
-            continue
-        rebuilt = "+" + line[1:]
-        m = NPM_LINE_RE.match(rebuilt)
-        if m:
-            names.add(m.group(1))
     return names
 
 
@@ -155,11 +189,16 @@ def pypi_metadata(name: str) -> dict:
 
 
 def build_report(base: str, head: str) -> dict:
-    npm_diff = git_diff(base, head, NPM_MANIFESTS)
-    py_diff = git_diff(base, head, PYTHON_MANIFESTS)
+    base_npm = git_show(base, NPM_MANIFEST)
+    head_npm = git_show(head, NPM_MANIFEST)
+    new_npm = npm_dependency_names(head_npm) - npm_dependency_names(base_npm)
 
-    new_npm = extract_added_npm_deps(npm_diff) - removed_npm_deps(npm_diff)
-    new_py = extract_added_python_deps(py_diff) - removed_python_deps(py_diff)
+    new_py: set[str] = set()
+    for manifest in PYTHON_MANIFESTS:
+        base_content = git_show(base, manifest)
+        head_content = git_show(head, manifest)
+        parser = requirements_txt_names if manifest == "requirements.txt" else pyproject_toml_names
+        new_py |= parser(head_content) - parser(base_content)
 
     npm_entries = [
         {"name": name, "registry": "npm", "metadata": npm_metadata(name)}
@@ -190,7 +229,22 @@ def main() -> int:
     parser.add_argument("--head", default="HEAD")
     args = parser.parse_args()
 
-    report = build_report(args.base, args.head)
+    try:
+        report = build_report(args.base, args.head)
+    except GitError as e:
+        # Codex review bulgusu: bu HATA registry erişim hatasından farklı —
+        # manifest hiç okunamadı/parse edilemedi, "yeni paket yok" ile
+        # KARIŞTIRILMAMALI. Rapor yine üretilir ama "error" alanıyla
+        # işaretlenir ve exit code 1 döner.
+        print(json.dumps({
+            "new_dependencies_found": None,
+            "npm": [],
+            "python": [],
+            "error": str(e),
+            "note": "Manifest okuma/parse hatası — bu bir 'yeni bağımlılık yok' sonucu DEĞİLDİR, analiz güvenilir değildir.",
+        }, ensure_ascii=False, indent=2))
+        return 1
+
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 
