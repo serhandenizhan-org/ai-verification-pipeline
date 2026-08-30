@@ -11,20 +11,51 @@ CI workflow'ları) aittir. Bir agent "PASS" dediği için ledger'a "PASS"
 yazılmaz — ledger, exit code ve structured tool output'undan orchestrator
 tarafından üretilir.
 
-Format: JSON Lines (.verification/ledger/pr-<no>.jsonl)
-Her satır bağımsız bir event'tir. Var olan satırlar asla değiştirilmez,
-yalnızca yeni satır eklenir.
+Depolama: PostgreSQL (bkz. schema.sql, HANDOFF.md 3.3) — çoklu PR
+eşzamanlılığında sorgulanabilirlik için eski JSON dosya bazlı (.verification/
+ledger/pr-<no>.jsonl) yaklaşımdan taşındı. Bağlantı DATABASE_URL ortam
+değişkeninden okunur; tanımlı değilse Mac mini'deki local dev instance'a
+düşer (bkz. .env.example).
+
+Append-only garantisi: append_entry() yalnızca INSERT yapar, hiçbir
+fonksiyon UPDATE/DELETE çalıştırmaz.
 """
 
 from __future__ import annotations
 
-import json
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
-LEDGER_DIR = Path(".verification/ledger")
+import psycopg
+from psycopg.rows import dict_row
+
+DEFAULT_DATABASE_URL = "postgresql://pipeline_app@localhost/verification_pipeline"
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS ledger_entries (
+    id          BIGSERIAL PRIMARY KEY,
+    pr          INTEGER NOT NULL,
+    event       TEXT NOT NULL,
+    data        JSONB NOT NULL DEFAULT '{}'::jsonb,
+    "timestamp" TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_entries_pr ON ledger_entries (pr);
+CREATE INDEX IF NOT EXISTS idx_ledger_entries_pr_id ON ledger_entries (pr, id);
+"""
+
+
+def _database_url() -> str:
+    return os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
+
+
+def _connect() -> psycopg.Connection:
+    conn = psycopg.connect(_database_url(), row_factory=dict_row)
+    with conn.cursor() as cur:
+        cur.execute(_SCHEMA)
+    conn.commit()
+    return conn
 
 
 @dataclass
@@ -35,42 +66,45 @@ class LedgerEntry:
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
-def _ledger_path(pr_number: int) -> Path:
-    return LEDGER_DIR / f"pr-{pr_number}.jsonl"
-
-
 def append_entry(entry: LedgerEntry) -> None:
     """
-    Ledger'a yeni bir satır ekler. Var olan dosyaya append modunda yazar,
-    hiçbir zaman mevcut içeriği okuyup yeniden yazmaz (append-only garantisi).
+    Ledger'a yeni bir satır ekler (INSERT ONLY — append-only garantisi).
     """
-    LEDGER_DIR.mkdir(parents=True, exist_ok=True)
-    path = _ledger_path(entry.pr)
-    line = json.dumps(
-        {
-            "pr": entry.pr,
-            "event": entry.event,
-            "data": entry.data,
-            "timestamp": entry.timestamp,
-        },
-        ensure_ascii=False,
-    )
-    with path.open("a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ledger_entries (pr, event, data, "timestamp")
+                VALUES (%s, %s, %s, %s)
+                """,
+                (entry.pr, entry.event, psycopg.types.json.Jsonb(entry.data), entry.timestamp),
+            )
+        conn.commit()
 
 
 def read_ledger(pr_number: int) -> list[dict]:
-    """Bir PR'ın tüm ledger geçmişini okur (yalnızca okuma amaçlı)."""
-    path = _ledger_path(pr_number)
-    if not path.exists():
-        return []
-    entries = []
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                entries.append(json.loads(line))
-    return entries
+    """Bir PR'ın tüm ledger geçmişini okur (yalnızca okuma amaçlı), id sırasıyla."""
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT pr, event, data, "timestamp"
+                FROM ledger_entries
+                WHERE pr = %s
+                ORDER BY id ASC
+                """,
+                (pr_number,),
+            )
+            rows = cur.fetchall()
+    return [
+        {
+            "pr": row["pr"],
+            "event": row["event"],
+            "data": row["data"],
+            "timestamp": row["timestamp"].isoformat() if hasattr(row["timestamp"], "isoformat") else row["timestamp"],
+        }
+        for row in rows
+    ]
 
 
 def summarize(pr_number: int) -> dict:
@@ -115,6 +149,7 @@ def summarize(pr_number: int) -> dict:
 
 if __name__ == "__main__":
     import argparse
+    import json
     import sys
 
     parser = argparse.ArgumentParser(description="Verification Ledger CLI")

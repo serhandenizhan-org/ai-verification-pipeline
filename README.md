@@ -16,10 +16,19 @@ cp verification/playwright/test.env.example verification/playwright/test.env
 # 2. Python bağımlılıklarını kur
 pip install -r orchestrator/requirements.txt
 
-# 3. Secret tarama aracını kur (gitleaks)
+# 3. PostgreSQL kur ve ledger veritabanını oluştur (Verification Ledger için)
+brew install postgresql@16 && brew services start postgresql@16
+createdb verification_pipeline
+psql verification_pipeline -c "CREATE ROLE pipeline_app LOGIN;"
+psql verification_pipeline -c "GRANT ALL PRIVILEGES ON DATABASE verification_pipeline TO pipeline_app;"
+psql verification_pipeline -c "GRANT ALL ON SCHEMA public TO pipeline_app;"
+# Şema orchestrator/ledger.py tarafından ilk bağlantıda otomatik oluşturulur
+# (bkz. orchestrator/schema.sql için manuel/dokümantasyon amaçlı versiyon)
+
+# 4. Secret tarama aracını kur (gitleaks)
 #    bkz. README > Güvenlik Araçları
 
-# 4. AC dosyasını kilitle (Şef onayından sonra)
+# 5. AC dosyasını kilitle (Şef onayından sonra)
 bash scripts/lock_ac.sh specs/features/<feature-adi>/acceptance_criteria.yaml
 ```
 
@@ -31,7 +40,10 @@ orchestrator/          — router, circuit breaker, ledger, notifier script'leri
 verification/          — Codex severity kuralları, Playwright test ortamı
 specs/                 — DoD, güvenlik taban çizgisi, feature bazlı AC dosyaları
 scripts/               — AC lock, Stripe test-key guard vb. yardımcı script'ler
-.verification/         — ledger ve circuit breaker state (git'e committed, .env değil)
+.verification/         — circuit breaker state (git'e committed, .env değil)
+                          NOT: Verification Ledger artık PostgreSQL'de tutuluyor
+                          (bkz. orchestrator/schema.sql, DATABASE_URL), .verification/
+                          altındaki eski ledger/ klasörü kullanımdan kalktı.
 ```
 
 ## Güvenlik Araçları
