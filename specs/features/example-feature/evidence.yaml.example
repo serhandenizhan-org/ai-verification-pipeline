@@ -1,0 +1,11 @@
+# evidence.yaml — AC ID -> test/kanıt eşlemesi (bkz. scripts/check_ac_traceability.py)
+#
+# acceptance_criteria.yaml KİLİTLİ bir dosyadır (hash'i Postgres'te) ve
+# implementasyondan SONRA değiştirilemez. Bu yüzden "bu AC'yi hangi test
+# kanıtlıyor" bilgisi bu AYRI, kilitlenmeyen dosyada tutulur — Builder
+# kodu+testi yazdıkça burayı serbestçe günceller.
+#
+# Kullanım: bu dosyayı `evidence.yaml` olarak kopyalayıp doldurun.
+#
+# AC-01: "tests/test_admin.py::test_delete_removes_r2_object"
+# AC-02: "tests/test_admin.py::test_duplicate_subscription_rejected"

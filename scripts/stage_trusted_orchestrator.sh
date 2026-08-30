@@ -42,6 +42,7 @@ ORCHESTRATOR_FILES=(
   "alert_and_rotate.py"
   "trufflehog_result.py"
   "ac_lock.py"
+  "finding_triage.py"
   "requirements.txt"
   "schema.sql"
 )
@@ -49,6 +50,7 @@ ORCHESTRATOR_FILES=(
 SCRIPT_FILES=(
   "check_new_dependencies.py"
   "verify_ac_lock.py"
+  "check_ac_traceability.py"
 )
 
 for f in "${ORCHESTRATOR_FILES[@]}"; do

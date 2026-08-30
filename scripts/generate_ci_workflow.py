@@ -313,6 +313,8 @@ jobs:
         run: pip install -r "${{ steps.stage.outputs.dir }}/orchestrator/requirements.txt"
       - name: AC lock doğrula
         run: python3 "${{ steps.stage.outputs.dir }}/scripts/verify_ac_lock.py"
+      - name: AC-test izlenebilirliği (ADVISORY — bloklamaz)
+        run: python3 "${{ steps.stage.outputs.dir }}/scripts/check_ac_traceability.py"
 
 """
 
