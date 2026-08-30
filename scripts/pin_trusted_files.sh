@@ -1,43 +1,29 @@
 #!/usr/bin/env bash
 #
-# pin_trusted_files.sh — CI, bir PR'ın checkout edilmiş kopyası üzerinde
-# orchestrator script'lerini VE agent davranışını kontrol eden dosyaları
-# (AGENTS.md, severity_rules.md) çalıştırmadan/okumadan ÖNCE bu script
-# çağrılmalıdır.
+# pin_trusted_files.sh — CI, PR'ın checkout edilmiş kopyasında Codex'in
+# OKUYACAĞI (çalıştırmayacağı — çalıştırılanlar artık ayrı, bkz. aşağı)
+# davranış dosyalarını (AGENTS.md, severity_rules.md) ezmek için kullanılır.
 #
-# NEDEN: Bu dosyalar da PR'ın bir parçası olduğu için, kötü niyetli bir PR
-# şunları yapabilir:
-#   - orchestrator/verifier.py'ı değiştirip runner'ın GITHUB_TOKEN'ını/
-#     Postgres erişimini/Codex kimlik bilgilerini kötüye kullanmak
-#   - orchestrator/requirements.txt'e zararlı bir paket ekleyip pip install
-#     sırasında host'ta kod çalıştırmak (Codex review bulgusu — P1)
-#   - AGENTS.md'yi değiştirip Codex'e "bulguları gizle" gibi prompt
-#     injection talimatları vermek (Codex review bulgusu — P1, authenticated
-#     ChatGPT kimlik bilgisiyle çalışan bir agent'a karşı özellikle ciddi)
+# KAPSAM DEĞİŞTİ: orchestrator/*.py ve scripts/*.py artık burada EZİLMİYOR.
+# Codex review bulgusu: aynı dizinde çalıştırılan Python script'leri için
+# dosya bazlı "ezme" yeterli değil — Python, çalıştırılan script'in kendi
+# dizinini sys.path'in başına koyduğundan, PR yeni bir sibling modül
+# ekleyerek (ör. orchestrator/argparse.py) ezilmiş/pinlenmiş dosyaların
+# import ettiği modülleri gölgeleyebilir (gerçek saldırı ile test edildi).
+# Bu risk artık scripts/stage_trusted_orchestrator.sh ile çözülüyor —
+# Python KODU PR checkout'unun tamamen DIŞINDAN çalıştırılıyor.
 #
-# ÇÖZÜM: PR'ın diğer her şeyi (gerçek kod değişiklikleri) normal şekilde
-# checkout edilip incelenir — ama bu listedeki dosyalar HER ZAMAN origin/main
-# üzerindeki güvenilir versiyonla ezilir, PR ne yazarsa yazsın.
+# BU SCRIPT yalnızca Codex'in DOĞRUDAN OKUDUĞU (çalıştırmadığı) doğal dil
+# dosyaları için kalıyor — çünkü sys.path shadowing riski yalnızca
+# ÇALIŞTIRILAN Python koduna özgü, AGENTS.md gibi metin dosyaları için
+# risk farklı (prompt injection) ve in-place ezme bunun için yeterli.
 #
-# Kullanım (checkout'tan hemen sonra, herhangi bir orchestrator script'i
-# veya `codex` çağrılmadan önce):
+# Kullanım (checkout'tan hemen sonra, `codex` çağrılmadan önce):
 #   bash scripts/pin_trusted_files.sh
 
 set -euo pipefail
 
 TRUSTED_FILES=(
-  "orchestrator/router.py"
-  "orchestrator/verifier.py"
-  "orchestrator/ledger.py"
-  "orchestrator/circuit_breaker.py"
-  "orchestrator/notifier.py"
-  "orchestrator/alert_and_rotate.py"
-  "orchestrator/trufflehog_result.py"
-  "orchestrator/requirements.txt"
-  "orchestrator/schema.sql"
-  "scripts/check_new_dependencies.py"
-  "scripts/lock_ac.sh"
-  "scripts/verify_ac_lock.sh"
   "AGENTS.md"
   "verification/codex/severity_rules.md"
 )

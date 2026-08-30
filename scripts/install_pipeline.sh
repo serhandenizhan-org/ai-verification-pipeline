@@ -73,7 +73,8 @@ echo "kopyalandı: orchestrator/"
 # --- scripts/ ---
 mkdir -p "$TARGET_DIR/scripts/git-hooks"
 for f in lock_ac.sh verify_ac_lock.sh check_stripe_key_mode.sh \
-         check_new_dependencies.py pin_trusted_files.sh generate_ci_workflow.py; do
+         check_new_dependencies.py pin_trusted_files.sh generate_ci_workflow.py \
+         stage_trusted_orchestrator.sh; do
   cp "$SOURCE_REPO_ROOT/scripts/$f" "$TARGET_DIR/scripts/$f"
 done
 cp "$SOURCE_REPO_ROOT/scripts/git-hooks/pre-commit" "$TARGET_DIR/scripts/git-hooks/pre-commit"
@@ -192,17 +193,20 @@ if [[ -n "$GITHUB_REPO" ]]; then
     gh label create "ready-for-human-approval" --repo "$GITHUB_REPO" \
       --color "0E8A16" --description "CI ve Codex geçti, Şef onayı bekleniyor" 2>&1 || true
 
-    # NOT: required_status_checks context'i "Secret Scan (gitleaks)" —
-    # generate_ci_workflow.py'nin ürettiği secret-scan job'ının adıyla
-    # eşleşiyor (bu job stack tespitinden bağımsız, her zaman aynı isimle
-    # üretilir). Context adı gerçek job adıyla BİREBİR eşleşmezse branch
-    # protection asla "yeşil" görmez (bu repoda saatlerce süren gerçek bir
-    # hataydı, bkz. HANDOFF.md).
+    # NOT: required_status_checks context'leri GERÇEK adlarla BİREBİR
+    # eşleşmeli — context adı job adıyla eşleşmezse branch protection asla
+    # "yeşil" görmez (bu repoda saatlerce süren gerçek bir hataydı, bkz.
+    # HANDOFF.md). İki context de zorunlu:
+    #   - "Secret Scan (gitleaks)": Fast CI'ın erken/hızlı katmanı
+    #   - "verification-gate": TEK bağlayıcı karar (risk + Codex review +
+    #     circuit breaker + secret rotasyonu hepsi buna dahil, bkz.
+    #     verification.yml + verifier.py cmd_gate). Codex review bulgusu:
+    #     önceden hiçbir status bu kararı GERÇEKTEN merge'e bağlamıyordu.
     gh api "repos/$GITHUB_REPO/branches/main/protection" --method PUT --input - <<'EOF' 2>&1 || true
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["Secret Scan (gitleaks)"]
+    "contexts": ["Secret Scan (gitleaks)", "verification-gate"]
   },
   "enforce_admins": false,
   "required_pull_request_reviews": {
