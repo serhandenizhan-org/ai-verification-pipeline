@@ -230,6 +230,8 @@ def _summarize_entries(repo: str, pr_number: int, entries: list[dict]) -> dict:
         elif event == "codex_result":
             summary["codex"] = data.get("status")
             summary["codex_findings"] = data.get("findings")
+            summary["codex_report_text"] = data.get("report_text")
+            summary["deps_report"] = data.get("deps_report")
         elif event == "fix_iteration":
             summary["iterations"] += 1
         elif event == "human_approval":
