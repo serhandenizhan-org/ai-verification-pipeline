@@ -48,6 +48,7 @@ import notifier
 import router
 import alert_and_rotate
 import finding_triage
+import pipeline_control
 
 
 def cmd_compute_risk(args: argparse.Namespace) -> int:
@@ -215,6 +216,13 @@ def _evaluate_gate(repo: str, pr: int, head_sha: str) -> tuple[str, str, dict]:
     tam yorum metnini oluşturmak için kullandığı ledger özetidir (rapor
     metni, tedarik zinciri raporu dahil).
     """
+    # Codex özellik 7: Şef, Telegram üzerinden bir repo'yu KASITLI olarak
+    # durdurabilir (circuit breaker'dan farklı — otomatik değil, insan
+    # kararı, repo genelinde). Bu kontrol her şeyden ÖNCE gelir.
+    stopped, stop_reason = pipeline_control.is_stopped(repo)
+    if stopped:
+        return "FAIL", f"Şef pipeline'ı manuel olarak durdurdu: {stop_reason or 'sebep belirtilmedi'}", {}
+
     if circuit_breaker.is_tripped(repo, pr):
         return "FAIL", "Circuit breaker tripped — Şef'in reset onayı gerekiyor.", {}
 

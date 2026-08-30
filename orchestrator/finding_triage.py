@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS finding_history (
     accepted_by TEXT,
     accepted_reason TEXT,
     accepted_at TIMESTAMPTZ,
+    accepted_until TIMESTAMPTZ,
     PRIMARY KEY (repo, fingerprint)
 );
 """
@@ -85,6 +86,9 @@ def _ensure_schema(conn) -> None:
     with conn.cursor() as cur:
         cur.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_INIT_LOCK_ID,))
         cur.execute(_SCHEMA)
+        # Feature 7 öncesi oluşturulmuş tablolarda (PR #30) bu kolon yok —
+        # ADD COLUMN IF NOT EXISTS ile geriye dönük uyumlu migration.
+        cur.execute("ALTER TABLE finding_history ADD COLUMN IF NOT EXISTS accepted_until TIMESTAMPTZ")
     conn.commit()
 
 
@@ -136,8 +140,16 @@ def get_status(repo: str, fingerprint: str) -> str | None:
         conn.close()
 
 
-def accept_finding(repo: str, fingerprint: str, accepted_by: str, reason: str) -> bool:
-    """Şef onayıyla bir bulguyu istisna olarak işaretler. Satır bulunamazsa False döner."""
+def accept_finding(
+    repo: str, fingerprint: str, accepted_by: str, reason: str, expires_in_hours: float | None = None
+) -> bool:
+    """
+    Şef onayıyla bir bulguyu istisna olarak işaretler. Satır bulunamazsa
+    False döner. `expires_in_hours` verilirse istisna SÜRELİDİR — bu süre
+    geçtikten sonra `unaccepted_blocking_count` bu bulguyu tekrar
+    bloklayıcı sayar (bkz. Codex özellik 7: "yetkili durdur/devam + süreli
+    istisna"). Verilmezse istisna kalıcıdır (eski davranış).
+    """
     _require_repo(repo)
     if not accepted_by.strip():
         raise ValueError("accepted_by boş olamaz — istisna her zaman bir insan ismine bağlanmalı.")
@@ -148,10 +160,13 @@ def accept_finding(repo: str, fingerprint: str, accepted_by: str, reason: str) -
             cur.execute(
                 """
                 UPDATE finding_history
-                SET status = 'accepted', accepted_by = %s, accepted_reason = %s, accepted_at = now()
+                SET status = 'accepted', accepted_by = %s, accepted_reason = %s,
+                    accepted_at = now(),
+                    accepted_until = CASE WHEN %s::double precision IS NULL THEN NULL
+                                          ELSE now() + (%s::double precision::text || ' hours')::interval END
                 WHERE repo = %s AND fingerprint = %s
                 """,
-                (accepted_by, reason, repo, fingerprint),
+                (accepted_by, reason, expires_in_hours, expires_in_hours, repo, fingerprint),
             )
             updated = cur.rowcount > 0
         conn.commit()
@@ -172,13 +187,22 @@ def unaccepted_blocking_count(repo: str, findings: list[Finding]) -> int:
         count = 0
         with conn.cursor() as cur:
             for f in p1:
+                # Süreli istisna (accepted_until) geçmişse `is_expired` true
+                # olur — bulgu tekrar bloklayıcı sayılır (fail-closed: süre
+                # dolunca sessizce kalıcı istisnaya dönüşmemeli). Karşılaştırma
+                # SQL/now() tarafında yapılır, Python-tz uyuşmazlığından kaçınmak için.
                 cur.execute(
-                    "SELECT status FROM finding_history WHERE repo = %s AND fingerprint = %s",
+                    """
+                    SELECT status,
+                           (accepted_until IS NOT NULL AND accepted_until <= now()) AS is_expired
+                    FROM finding_history WHERE repo = %s AND fingerprint = %s
+                    """,
                     (repo, f.fingerprint),
                 )
                 row = cur.fetchone()
                 status = row["status"] if row else "open"
-                if status != "accepted":
+                is_expired = bool(row["is_expired"]) if row else False
+                if status != "accepted" or is_expired:
                     count += 1
         return count
     finally:

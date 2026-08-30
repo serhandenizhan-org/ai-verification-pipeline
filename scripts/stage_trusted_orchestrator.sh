@@ -44,6 +44,8 @@ ORCHESTRATOR_FILES=(
   "ac_lock.py"
   "finding_triage.py"
   "usage_tracker.py"
+  "pipeline_control.py"
+  "telegram_commands.py"
   "requirements.txt"
   "schema.sql"
 )
