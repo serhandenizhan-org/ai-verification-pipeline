@@ -188,38 +188,80 @@ TruffleHog aktif bir secret bulduğunda sistem HİÇBİR ZAMAN otomatik rotate
 etmez/durdurmaz — sadece Telegram'dan Şef'e bildirir, rotation her zaman
 Şef tarafından manuel yapılır. (Madde 2.1'deki gerçek olaydan sonra netleşti.)
 
-## 4. Henüz YAPILMAYAN, sırada olan işler (Mac mini'de)
+## 4. Durum (2026-08-30 Mac mini oturumu sonrası)
 
-Bunlar fiziksel Mac mini erişimi gerektirdiği için henüz uygulanmadı:
+### 4.1 TAMAMLANDI bu oturumda
 
-1. **Bu oturumun gerçekten Mac mini'de çalıştığını doğrula** (`hostname`,
-   `uname -a` ile kontrol edilebilir).
-2. GitHub kişisel hesabı → Organization'a geçiş (repo transfer).
-3. Self-hosted GitHub Actions runner kurulumu (org seviyesinde kayıt),
-   launchd ile her zaman açık servis olarak ayarlanması.
-4. Docker kurulumu, CI job'larının container içinde izole çalışacak şekilde
-   güncellenmesi.
-5. PostgreSQL kurulumu, `orchestrator/ledger.py`'nin JSON'dan Postgres'e
-   taşınması (şema tasarımı dahil).
-6. Telegram bot'a komut dinleme (`getUpdates` polling) eklenmesi —
-   `/durdur`, `/devam` gibi komutlar için.
-7. Maliyet eşiklerinin (2-3 kademe) Şef ile birlikte netleştirilip
-   `orchestrator/`'a yapılandırma olarak eklenmesi.
-8. Claude Code CLI'ın (`claude -p ...` headless) ve Codex CLI'ın Mac
-   mini'de kendi hesap/abonelik girişleriyle login edilip, CI job'larından
-   otomatik (insan tetiklemesi olmadan) çağrılacak şekilde workflow'lara
-   entegre edilmesi — şu an Builder/Orchestrator/Codex hâlâ Şef'in elle
-   başlattığı Claude Code sohbetleri üzerinden çalışıyor, bu adım
-   otomasyonun asıl can damarı.
-9. `install_pipeline.sh` gibi bir bootstrap script yazılması — yeni bir
-   projeye bu pipeline'ı tek komutla (workflow dosyaları + AC klasörü +
-   pre-commit hook + gerekli label'lar + branch protection) bağlamak için.
-10. Bu repodaki (`ai-verification-pipeline`) `ci.yml`/`verification.yml`
-    hâlâ eski Node-only şablon — `kuyumcukent-project`'te yaptığımız
-    stack-özel uyarlamanın genel bir "şablon" versiyonunun buraya geri
-    taşınması (backport) gerekebilir, ya da bu repo tamamen "genel kural +
-    script" deposu olarak kalıp CI şablonlarının stack'e göre
-    uyarlanacağı açıkça dokümante edilebilir.
+1. ✅ Mac mini doğrulandı (`Mac16,10`, hostname `192.168.1.115`).
+2. ✅ `serhandenizhan-org` organizasyonu oluşturuldu (kişisel hesap
+   dönüştürülmedi — ayrı yeni org, login korunuyor).
+3. ✅ Repo `serhandenizhan-org/ai-verification-pipeline`'a taşındı — **public**
+   (GitHub Free plan'da private repo'larda org branch protection + self-hosted
+   runner'ın public repo erişimi çakışıyordu, ikisi arasında public seçildi,
+   gitleaks ile tüm geçmiş temiz olduğu doğrulandıktan sonra).
+4. ✅ Self-hosted runner (`mac-mini-runner`) org seviyesinde kayıtlı, launchd
+   LaunchAgent olarak çalışıyor (`~/actions-runner`, `./svc.sh start`).
+   Runner grubunda `allows_public_repositories: true` (elle GitHub UI'dan
+   açıldı, Claude Code klasik API üzerinden değiştiremedi).
+5. ✅ Docker Desktop zaten kuruluydu, çalışır durumda. **ÖNEMLİ**: macOS
+   self-hosted runner'da GitHub Actions'ın native `container:` job anahtarı
+   ÇALIŞMIYOR (yalnızca Linux runner'da destekleniyor) — bunun yerine
+   `ci.yml`'de untrusted adımlar `docker run --rm -v $PWD:/workspace ...`
+   ile elle sandbox'lanıyor.
+6. ✅ PostgreSQL 16 kuruldu (`brew services start postgresql@16`),
+   `verification_pipeline` DB + `pipeline_app` rolü. `orchestrator/ledger.py`
+   JSON dosyalarından Postgres'e taşındı (bkz. `orchestrator/schema.sql`),
+   aynı public API korunarak. Codex review bir concurrency bug'ı buldu
+   (advisory unlock commit'ten önce çağrılıyordu) — `pg_advisory_xact_lock`
+   ile düzeltildi, 8 eşzamanlı bağlantıyla test edildi.
+7. ✅ Codex CLI kuruldu, `codex login --device-auth` ile ChatGPT hesabıyla
+   authenticated. `verification.yml`'deki yer tutucu gerçek
+   `codex exec review` çağrısıyla değiştirildi. Dogfooding sırasında Codex
+   4 gerçek bulgu buldu (fork PR checkout bug'ı, grep double-zero bug'ı, VE
+   İKİ CİDDİ GÜVENLİK AÇIĞI: PR-controlled `orchestrator/*.py`/`AGENTS.md`'nin
+   PR'ın kendi checkout'undan authenticated çalıştırılması). Hepsi düzeltildi
+   — bkz. `scripts/pin_trusted_files.sh` (orchestrator script'leri, AGENTS.md,
+   severity_rules.md HER ZAMAN `git show origin/main:...` ile main'den
+   sabitlenir, PR ne değiştirirse değiştirsin).
+8. ✅ Telegram bildirimleri uçtan uca test edildi (`notifier.py test` +
+   gerçek `record-codex` çağrısı ile). Eksik olan tek şey
+   `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`'nin GitHub Secrets'a eklenip
+   `codex-review` job'una bağlanmasıydı — yapıldı. Ayrıca Mac mini'nin eski
+   SSL sertifika paketi (`Install Certificates.command`) güncellendi.
+9. ✅ `scripts/install_pipeline.sh` yazıldı ve test edildi — yeni bir projeye
+   tek komutla (dosya kopyalama + pre-commit hook + GitHub label/branch
+   protection) bu pipeline'ı bağlıyor. `ci.yml` bilinçli olarak
+   `ci.yml.example` olarak kopyalanıyor (stack-özel, elle uyarlanmalı).
+10. ✅ Branch protection dersi: `required_status_checks.contexts` GERÇEK
+    check run adıyla eşleşmeli (`"Secret Scan (gitleaks)"`, workflow/job
+    display name'i — `branch-protection.md`'deki `"Fast CI / secret-scan"`
+    ÖNERİSİ YANLIŞTI, hiç eşleşmiyordu, saatlerce merge'ü sessizce blokladı).
+    `install_pipeline.sh` artık doğru context adını kullanıyor.
+11. ✅ Solo geliştirme kararı: branch protection artık `required_approving_review_count: 0`,
+    `enforce_admins: false` — GitHub zaten kendi PR'ını onaylamana izin
+    vermiyor, bu yüzden solo projelerde review zorunluluğu pratik değil.
+
+### 4.2 HENÜZ YAPILMADI
+
+1. Telegram bot'a komut dinleme (`getUpdates` polling) eklenmesi —
+   `/durdur`, `/devam` gibi komutlar için. **Şef bu turda bunu ERTELEDİ**
+   ("zor diyorsan yapmayalım") — cost/usage guard'ın interaktif STOP/CONTINUE
+   kısmı da bu yüzden yapılmadı, yalnızca dependency/supply-chain güvenliği
+   (madde 1) uygulandı.
+2. Maliyet eşiklerinin (2-3 kademe) netleştirilmesi — yukarıdaki madde 1 ile
+   birlikte ertelendi.
+3. Claude Code CLI'ın headless (`claude -p ...`) CI job'larından otomatik
+   çağrılması — Codex CLI tarafı yapıldı (madde 4.1.7), Claude/Builder tarafı
+   HÂLÂ Şef'in elle başlattığı sohbetler üzerinden çalışıyor. Bu, tam otonom
+   "PR açıldı → Mac mini otomatik algıladı → hiç insan müdahalesi olmadan"
+   döngüsünün eksik kalan son parçası.
+4. `ci.yml` hâlâ Node-only şablon (`ci.yml.example` olarak `install_pipeline.sh`
+   ile kopyalanıyor) — gerçek bir proje eklenince stack'e göre elle
+   uyarlanması gerekiyor, otomatik stack detection yok.
+5. Circuit breaker, CI (Fast CI) taraflı hatalar için HİÇ tetiklenmiyor —
+   yalnızca `record-codex`/`record-ci` CLI komutları çağrıldığında devreye
+   giriyor, ama `ci.yml` şu an `verifier.py record-ci`'yi hiç çağırmıyor.
+   Yalnızca Codex tarafı (risk-routing → codex-review) tam bağlı.
 
 ## 5. Önemli dosyalar / nereye bakılır
 
